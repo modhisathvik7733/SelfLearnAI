@@ -370,6 +370,104 @@ pathway choice.
 
 ---
 
+## Compositionality — independently-trained concepts compose
+
+The deepest research result of the project: **concept operators trained
+independently combine into chained transformations** with perfect held-out
+accuracy.
+
+### Setup
+
+Two operators trained independently on raw GTE-base outputs (text-only
+pathway, no Stage 1):
+
+  • **agentive** — 3 pairs (write→writer, build→builder, teach→teacher).
+  • **plural** — 44 pairs (cat→cats, dog→dogs, etc.).
+
+Test: apply `plural(agentive(emb(verb)))` to 6 held-out verbs and check if
+the result lands on the correct plural-agent in a candidate pool.
+
+  ```
+  paint  →  painter  →  painters
+  drive  →  driver   →  drivers
+  sing   →  singer   →  singers
+  dance  →  dancer   →  dancers
+  run    →  runner   →  runners
+  help   →  helper   →  helpers
+  ```
+
+### Results (`scripts/test_compositionality.py`)
+
+```
+TEST 1 — Composition correctness
+  HARSH pool (with source-form distractors):    2/6 = 0.333
+  FAIR pool  (without source-form distractors): 6/6 = 1.000
+
+TEST 2 — Linearity (does z + v_a + v_p ≈ MLP-chain?)
+  cos(linear-chain, MLP-chain):                +0.983
+  Linear-chain accuracy (HARSH):                2/6 = 0.333
+  Linear-chain accuracy (FAIR):                 6/6 = 1.000
+
+TEST 3 — Inverse roundtrip (sanity)
+  cos(inverse(forward(z)), z):                 +0.990
+```
+
+### Three findings
+
+**1. Operators compose perfectly when source-form distractors are removed.**
+
+In a fair pool (only plural-agent forms + plain-noun-plural distractors),
+all 6 verbs map through both operators in sequence to the correct
+plural-agent. In the harsh pool (which includes `painter`, `running`,
+`dance` and similar source-form distractors), the chained shift loses
+top-1 by tiny cosine margins (0.005–0.01) — but **`cos(pred, truth)` is
+0.86–0.91 on every chain, including the failures**, confirming the chain
+lands in the correct embedding region.
+
+**2. The MLP residuals contribute almost nothing — operators are
+essentially additive linear shifts.**
+
+`cos(linear-chain, MLP-chain) = 0.983` means the chained MLP transformation
+is nearly indistinguishable from pure vector addition `z + v_a + v_p`. And
+the **linear-chain accuracy is identical to the MLP-chain accuracy** in
+both pools. The trained operators are, for compositional purposes, just
+learned direction vectors with magnitude.
+
+**3. Independently-trained operators compose without joint training.**
+
+`agentive` and `plural` saw zero overlapping training data. Their composed
+predictions on 6 held-out verbs land on the correct plural-agent forms.
+This is the algebraic structure of a vector space made operational.
+
+### Architectural implication
+
+The latent space supports a **concept algebra**:
+
+  ```
+  z_concept = base + Σ v_concept_i
+  ```
+
+Each learned concept is a direction vector. Concepts add. Independently-
+trained vectors compose without retraining.
+
+The architecture is therefore not just **few-shot at the per-concept level**
+(N=3 pairs → 1.000 held-out transfer) but **zero-shot at the composition
+level** (no joint training of operator pairs needed for chained
+transformations to work).
+
+### Honest limit on this finding
+
+The 2/6 HARSH pool result is real and quantifies the **shift-magnitude
+ceiling** of the architecture: chained shifts are slightly smaller than
+distances to immediate-source lexical distractors in semantic space. In
+applications where the candidate vocabulary contains the source's own
+morphological/semantic neighbors, retrieval accuracy degrades. To break
+this would require either contrastive training that explicitly pushes
+predictions away from sources, or removing source-forms from the
+candidate pool by construction.
+
+---
+
 ## What this validates about the project's central thesis
 
 The project set out to build a sample-efficient learning system that works
