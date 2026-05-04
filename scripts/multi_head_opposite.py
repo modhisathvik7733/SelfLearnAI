@@ -208,8 +208,8 @@ def n_params(model: nn.Module) -> int:
 # ---------------------------------------------------------------------------
 
 def train_eval(z_train_src, z_train_tgt, z_held_src, z_pool, pool_words,
-               tgt_held, *, arch: str, dim: int, device, seed: int,
-               epochs: int, lr: float, mlp_hidden: int):
+               tgt_held, z_held_tgt, *, arch: str, dim: int, device,
+               seed: int, epochs: int, lr: float, mlp_hidden: int):
     torch.manual_seed(seed)
     op = build_op(arch, dim, mlp_hidden=mlp_hidden).to(device)
     opt = torch.optim.AdamW(op.parameters(), lr=lr)
@@ -225,8 +225,12 @@ def train_eval(z_train_src, z_train_tgt, z_held_src, z_pool, pool_words,
         sims = pred_n @ pool_n.T
         best = sims.argmax(dim=-1).tolist()
         preds = [pool_words[i] for i in best]
+        # cos(predicted, true target embedding) — representation quality
+        # independent of pool/lure retrieval competition.
+        truth_n = F.normalize(z_held_tgt, dim=-1)
+        cos_truth = (pred_n * truth_n).sum(dim=-1).tolist()
     correct = sum(p == t for p, t in zip(preds, tgt_held))
-    return correct / len(tgt_held), preds, op
+    return correct / len(tgt_held), preds, op, cos_truth
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +251,11 @@ def main() -> None:
                         help="Comma-separated K values to sweep")
     parser.add_argument("--show-routing", action="store_true",
                         help="Print router head assignments per held-out source")
+    parser.add_argument("--fair-pool", action="store_true",
+                        help="Drop training-target tokens from the candidate "
+                             "pool, leaving only held-out targets + distractors. "
+                             "Isolates representation quality from "
+                             "training-target-lure retrieval competition.")
     args = parser.parse_args()
 
     from transformers import AutoModel, AutoTokenizer
@@ -258,6 +267,12 @@ def main() -> None:
     train_pairs = read_pairs(data_dir / "text_pairs_train.tsv")
     held_pairs  = read_pairs(data_dir / "text_pairs_held_out.tsv")
     pool        = read_pool(data_dir / "candidate_pool.txt")
+    if args.fair_pool:
+        # Drop training targets — they're the lures stealing held-out retrieval.
+        train_targets = {t for _, t in train_pairs}
+        pool = [w for w in pool if w not in train_targets]
+        print(f"FAIR pool: dropped {len(train_targets)} training targets "
+              f"as candidate lures.")
     print(f"Data: {len(train_pairs)} train, {len(held_pairs)} held-out, "
           f"{len(pool)} pool")
 
@@ -271,6 +286,7 @@ def main() -> None:
     z_train_src = encode_words(mdl, tok, [p[0] for p in train_pairs], args.device)
     z_train_tgt = encode_words(mdl, tok, [p[1] for p in train_pairs], args.device)
     z_held_src  = encode_words(mdl, tok, [p[0] for p in held_pairs],  args.device)
+    z_held_tgt  = encode_words(mdl, tok, [p[1] for p in held_pairs],  args.device)
     z_pool      = encode_words(mdl, tok, pool, args.device)
     tgt_held    = [p[1] for p in held_pairs]
 
@@ -283,38 +299,47 @@ def main() -> None:
 
     print(f"\nSweeping {len(archs)} architectures × {args.seeds} seeds:\n")
     print("=" * 88)
-    print(f"{'arch':<18}  {'params':>9}  {'mean acc':>9}  {'per-seed':<22}  {'preds':<20}")
+    print(f"{'arch':<18}  {'params':>9}  {'mean acc':>9}  {'per-seed':<22}  cos→truth")
     print("=" * 88)
 
     rows = []
     last_ops: dict[str, nn.Module] = {}
     for arch in archs:
-        accs, last_preds, last_op = [], None, None
+        accs, last_preds, last_op, last_cos = [], None, None, None
+        cos_means = []
         for seed in range(args.seeds):
-            acc, preds, op = train_eval(
+            acc, preds, op, cos_truth = train_eval(
                 z_train_src, z_train_tgt, z_held_src, z_pool, pool, tgt_held,
+                z_held_tgt,
                 arch=arch, dim=enc["dim"], device=args.device,
                 seed=seed, epochs=args.epochs, lr=args.lr,
                 mlp_hidden=args.mlp_hidden,
             )
             accs.append(acc); last_preds = preds; last_op = op
+            last_cos = cos_truth
+            cos_means.append(sum(cos_truth) / len(cos_truth))
         mean = sum(accs) / len(accs)
+        cos_mean = sum(cos_means) / len(cos_means)
         rows.append({"arch": arch, "params": n_params(last_op),
-                     "mean": mean, "accs": accs, "last_preds": last_preds})
+                     "mean": mean, "accs": accs, "last_preds": last_preds,
+                     "cos_mean": cos_mean, "last_cos": last_cos})
         last_ops[arch] = last_op
         accs_str = "[" + ",".join(f"{a:.2f}" for a in accs) + "]"
-        preds_str = ",".join(last_preds[:3]) + "..."
         print(f"{arch:<18}  {n_params(last_op):>9,}  {mean:>9.3f}  "
-              f"{accs_str:<22}  {preds_str:<20}")
+              f"{accs_str:<22}  cos→truth={cos_mean:.3f}")
 
     # ---- per-item predictions for best arch ----
     best = max(rows, key=lambda r: r["mean"])
     print("\n" + "=" * 88)
-    print(f"DETAIL — best arch: {best['arch']} (mean acc {best['mean']:.3f})")
+    print(f"DETAIL — best arch: {best['arch']} "
+          f"(mean acc {best['mean']:.3f}, mean cos→truth {best['cos_mean']:.3f})")
     print("=" * 88)
-    for (src, tgt), pred in zip(held_pairs, best["last_preds"]):
+    for (src, tgt), pred, c in zip(
+        held_pairs, best["last_preds"], best["last_cos"]
+    ):
         mark = "✓" if pred == tgt else "✗"
-        print(f"  {mark} {src:>8s} → {tgt:<8s}  predicted: {pred}")
+        print(f"  {mark} {src:>8s} → {tgt:<8s}  "
+              f"predicted: {pred:<10s}  cos(pred,truth)={c:+.3f}")
 
     # ---- routing diagnostic ----
     if args.show_routing:
