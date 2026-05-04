@@ -211,14 +211,65 @@ Two compounding causes (verified by `scripts/few_shot_young_followup.py`):
    training pairs, the average shift direction is too noisy to overcome the
    gap consistently.
 
-This is honest data about the architecture's floor: few-shot learning works
-*when source and target share enough latent-space structure that 3 examples
-constrain the shift direction*. Pure-semantic cross-category mappings need
-either more pairs or a candidate pool that doesn't compete with the source.
+### Follow-up grid (verified)
 
-The follow-up script (`scripts/few_shot_young_followup.py`) sweeps a 3×2 grid
-(N ∈ {3, 5, 9} × pool ∈ {with-lures, no-lures}) to quantify both effects
-exactly.
+`scripts/few_shot_young_followup.py` swept a 3×2 grid (N ∈ {3, 5, 9} × pool
+∈ {with-lures, no-lures}). The actual numbers:
+
+```
+                with-lures      no-lures
+N=3             0/6 (0.000)     3/6 (0.500)
+N=5             0/6 (0.000)     3/6 (0.500)
+N=9             0/6 (0.000)     3/6 (0.500)
+```
+
+**Two clean findings from this experiment:**
+
+1. **Pool design was a +0.50 effect.** Removing adult-animal lures jumps
+   accuracy from 0 to 0.50 at every N. The operator IS moving toward the
+   baby-region; it just couldn't escape the source-attractor when adults
+   were candidates.
+
+2. **More N gives zero improvement.** N=3, 5, 9 all hit 0.500 in the no-lures
+   pool. The architecture plateaus — same ceiling effect as comparative.
+
+**The 3/6 split is itself informative.** At N=9 with no lures:
+
+  ```
+  ✓ bear  → cub        (predicted: cub)
+  ✓ sheep → lamb       (predicted: lamb)
+  ✓ pig   → piglet     (predicted: piglet)
+  ✗ horse → foal       (predicted: embryo)        ← right region, wrong species
+  ✗ deer  → fawn       (predicted: caterpillar)   ← right region, wrong species
+  ✗ goat  → kid        (predicted: chick)         ← right region, wrong species
+  ```
+
+The failures all land in the **baby-animal region** but pick the wrong
+species. The operator learned a generic "shift toward baby" direction, but
+a single shared `v` cannot preserve source-specific identity across a
+cross-category mapping. This is a real architectural limit, sharpened by
+the experiment.
+
+### The architectural rule (now sharpened by 5 concept results)
+
+```
+Concept type                                   Few-shot N=3 result
+───────────────────────────────────────────────────────────────────
+Morphological + semantic (write→writer)        ✓ 100%
+Uni-axial + semantic (cat→cats, big→biggest)   ✓ 100%
+Cross-category preserving (horse→foal)         ⚠ ~50% (architecture floor)
+Multi-axial (big→small AND true→false)         ✗ ~0%
+```
+
+For cross-category-preserving concepts to exceed 50% would require either:
+
+- **Multi-head operator with routing** — different shift directions chosen
+  per source category, or
+- **Source-conditioned residual** — the residual MLP uses source identity to
+  choose the target region within the baby-animal cluster.
+
+Both are concrete next-iteration architectural extensions; neither is part
+of the current MVP.
 
 ---
 
