@@ -138,19 +138,38 @@ def train_operator(z_src, z_tgt, dim, device, epochs=2000, lr=1e-3, seed=0):
     return op
 
 
-def build_pool(families) -> list[str]:
+def build_pool(families, composition_demo) -> list[str]:
     """Combined candidate pool: every train + held-out target across all
-    families. Each family's evaluation searches this whole pool, so each
-    query is competing against analogically-related distractors from the
-    other families. Hardest realistic test."""
+    families, PLUS the expected composition targets (so the composition
+    test has valid candidates to retrieve from), PLUS a handful of
+    plural-form distractors of gender / family terms (so the composition
+    test is non-trivial — it has to pick the correct plural-female from
+    competing alternatives, not just the only plural in the pool).
+    """
     seen, pool = set(), []
+
+    def _add(w):
+        if w and w not in seen:
+            pool.append(w); seen.add(w)
+
     for fam in families:
         for _, t in fam["train"]:
-            if t not in seen:
-                pool.append(t); seen.add(t)
+            _add(t)
         for _, t in fam["queries"]:
-            if t not in seen:
-                pool.append(t); seen.add(t)
+            _add(t)
+
+    # Composition's expected final targets — required for the chain test
+    # to be evaluable at all.
+    for _, _intermediate, final in composition_demo["queries"]:
+        _add(final)
+
+    # Plural-form distractors so composition isn't trivial.
+    for w in [
+        "queens", "kings", "men", "women", "princes", "princesses",
+        "uncles", "aunts", "sons", "daughters", "husbands", "wives",
+    ]:
+        _add(w)
+
     return pool
 
 
@@ -175,7 +194,7 @@ def main() -> None:
     print(f"  encoder native dim: {dim}\n")
 
     # Build a unified candidate pool across all five analogy families.
-    pool_words = build_pool(ANALOGY_FAMILIES)
+    pool_words = build_pool(ANALOGY_FAMILIES, COMPOSITION_DEMO)
     z_pool = encode(mdl, tok, pool_words, args.device)
     z_pool_n = F.normalize(z_pool, dim=-1)
     print(f"Candidate pool: {len(pool_words)} words "
@@ -263,6 +282,7 @@ def main() -> None:
     finals = [q[2] for q in COMPOSITION_DEMO["queries"]]
 
     z_src = encode(mdl, tok, sources, args.device)
+    z_final_truth = encode(mdl, tok, finals, args.device)
     with torch.no_grad():
         z_after_first = op_first(z_src)
         z_after_second = op_second(z_after_first)
@@ -272,19 +292,26 @@ def main() -> None:
         # Composed lookup
         sims_second = F.normalize(z_after_second, dim=-1) @ z_pool_n.T
         final_preds = [pool_words[i] for i in sims_second.argmax(dim=-1).tolist()]
+        # Direct cosine of the chained prediction to the expected target
+        # (so we can see if the chain lands near the right embedding
+        # even when nearest-neighbor retrieval fails to top-1).
+        cos_to_final = F.cosine_similarity(
+            z_after_second, z_final_truth, dim=-1,
+        )
 
-    print(f"\n  {'source':<10s}  {'after-first':<14s}  {'after-second':<14s}  status")
-    print(f"  {'-'*10}  {'-'*14}  {'-'*14}  {'-'*20}")
+    print(f"\n  {'source':<10s}  {'after-first':<14s}  {'after-second':<14s}  "
+          f"{'cos→final':<10s}  status")
+    print(f"  {'-'*10}  {'-'*14}  {'-'*14}  {'-'*10}  {'-'*20}")
     composed_correct = 0
-    for s, fp, sp, im, fi in zip(
+    for s, fp, sp, im, fi, cos_f in zip(
         sources, first_preds, final_preds, intermediates, finals,
+        cos_to_final.tolist(),
     ):
-        first_ok = fp == im
         full_ok = sp == fi
         if full_ok:
             composed_correct += 1
         full_mark = "✓" if full_ok else "✗"
-        print(f"  {s:<10s}  {fp:<14s}  {sp:<14s}  "
+        print(f"  {s:<10s}  {fp:<14s}  {sp:<14s}  {cos_f:>+8.3f}  "
               f"{full_mark} expected: {im} → {fi}")
 
     print(f"\n  Composition accuracy (full chain): "
