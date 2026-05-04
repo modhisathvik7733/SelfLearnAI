@@ -1,18 +1,29 @@
-"""Stage 2 entrypoint — train the plurality concept operator.
+"""Stage 2 entrypoint — train ONE concept operator end-to-end.
+
+Concept-agnostic: works for plurality, past tense, negation, etc.
 
 Usage:
-    python3 scripts/stage2_train.py --config configs/stage2_plurality.yaml
+    # Plurality (with image pairs for visual grounding):
+    python3 scripts/stage2_train.py \\
+        --config configs/stage2_plurality.yaml \\
+        --data-dir data/plurality
 
-The training and held-out data lives in `data/plurality/`:
+    # Past tense (text only — no easy visual grounding):
+    python3 scripts/stage2_train.py \\
+        --config configs/stage2_past_tense.yaml \\
+        --data-dir data/past_tense \\
+        --no-images
 
-    data/plurality/text_pairs_train.tsv     50 sing\tplur lines
-    data/plurality/text_pairs_held_out.tsv  20 sing\tplur lines
-    data/plurality/text_pairs_other_cat.tsv 20 sing\tplur lines (different category, for cross-cat test)
-    data/plurality/image_pairs.tsv          path_one\tpath_many\tnoun
-    data/plurality/candidate_pool.txt       1 word/line — must include held-out plurals + distractors
+The data dir must contain:
 
-A starter set is provided in data/plurality/. Replace with your own as the
-project grows.
+    text_pairs_train.tsv      source<TAB>target
+    text_pairs_held_out.tsv   same format, for evaluation
+    candidate_pool.txt        target words + distractors, one per line
+    image_pairs.tsv           src_path<TAB>tgt_path<TAB>label   (optional)
+
+For text-only concepts, pass --no-images to skip image-pair loading.
+The cross-modal consistency loss is automatically disabled when no image
+pairs are present.
 """
 from __future__ import annotations
 
@@ -25,23 +36,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import yaml
 
 from selflearnai.concepts.train_concept import (
+    ConceptImagePair,
+    ConceptTextPair,
     Stage2Config,
     Stage2Trainer,
-    TextPair,
-    ImagePair,
 )
 
 
 def _read_tsv_pairs(path: Path) -> list[tuple[str, str]]:
+    """Read (source, target) tab-separated pairs. Skips blanks + # comments."""
+    out: list[tuple[str, str]] = []
     with open(path) as f:
-        return [tuple(line.strip().split("\t"))[:2] for line in f if line.strip()]
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            out.append((parts[0], parts[1]))
+    return out
 
 
-def _read_image_pairs(path: Path) -> list[ImagePair]:
-    """Read (one_path, many_path, noun) triples, one per line.
-    Skips blank lines and # comments. Validates each path actually exists.
+def _read_image_pairs(path: Path) -> list[ConceptImagePair]:
+    """Read (src_path, tgt_path, label) triples, one per line.
+    Skips blanks + # comments. Validates each path actually exists.
     """
-    out: list[ImagePair] = []
+    out: list[ConceptImagePair] = []
     bad: list[tuple[int, str]] = []
     with open(path) as f:
         for lineno, raw in enumerate(f, start=1):
@@ -52,16 +73,15 @@ def _read_image_pairs(path: Path) -> list[ImagePair]:
             if len(parts) < 3:
                 bad.append((lineno, f"need 3 tab-separated fields, got {len(parts)}"))
                 continue
-            one_p, many_p, noun = Path(parts[0]), Path(parts[1]), parts[2]
-            if not one_p.exists():
-                bad.append((lineno, f"missing file: {one_p}"))
+            src_p, tgt_p, label = Path(parts[0]), Path(parts[1]), parts[2]
+            if not src_p.exists():
+                bad.append((lineno, f"missing file: {src_p}"))
                 continue
-            if not many_p.exists():
-                bad.append((lineno, f"missing file: {many_p}"))
+            if not tgt_p.exists():
+                bad.append((lineno, f"missing file: {tgt_p}"))
                 continue
-            out.append(ImagePair(one_p, many_p, noun))
+            out.append(ConceptImagePair(src_p, tgt_p, label))
     if bad:
-        # Print warnings for bad entries; don't fail unless ALL entries bad.
         for lineno, msg in bad[:5]:
             print(f"  [warning] {path}:{lineno}  {msg}")
         if len(bad) > 5:
@@ -73,8 +93,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument(
-        "--data-dir", default="data/plurality",
-        help="dir containing text_pairs_train.tsv, image_pairs.tsv, etc.",
+        "--data-dir", required=True,
+        help="dir containing text_pairs_train.tsv (and optionally image_pairs.tsv)",
+    )
+    parser.add_argument(
+        "--no-images", action="store_true",
+        help="text-only training; skip image_pairs.tsv even if present",
     )
     args = parser.parse_args()
 
@@ -83,22 +107,20 @@ def main() -> None:
     cfg = Stage2Config(**cfg_dict)
 
     data_dir = Path(args.data_dir)
-    train_tsv  = _read_tsv_pairs(data_dir / "text_pairs_train.tsv")
-    text_pairs = [TextPair(s, p) for s, p in train_tsv]
-    image_pairs = _read_image_pairs(data_dir / "image_pairs.tsv")
+    train_tsv = _read_tsv_pairs(data_dir / "text_pairs_train.tsv")
+    text_pairs = [ConceptTextPair(s, t) for s, t in train_tsv]
 
-    print(f"Loaded {len(text_pairs)} text pairs and {len(image_pairs)} image pairs.")
+    image_pairs: list[ConceptImagePair] = []
+    if not args.no_images:
+        img_path = data_dir / "image_pairs.tsv"
+        if img_path.exists():
+            image_pairs = _read_image_pairs(img_path)
 
-    if not image_pairs:
-        sys.exit(
-            f"\nERROR: no valid image pairs in {data_dir / 'image_pairs.tsv'}.\n"
-            f"  Cross-modal consistency loss requires real image pairs.\n"
-            f"  Generate them first:\n"
-            f"    python3 scripts/build_image_pairs_coco.py \\\n"
-            f"        --coco-root /workspace/coco --split val2017 \\\n"
-            f"        --out {data_dir / 'image_pairs.tsv'} \\\n"
-            f"        --pairs-per-noun 10\n"
-        )
+    print(f"Loaded {len(text_pairs)} text pairs and {len(image_pairs)} image pairs"
+          f" for concept '{cfg.concept_name}'.")
+
+    if not text_pairs:
+        sys.exit(f"\nERROR: no valid text pairs in {data_dir / 'text_pairs_train.tsv'}.")
 
     trainer = Stage2Trainer(cfg, text_pairs, image_pairs)
     trainer.fit()

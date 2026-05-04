@@ -21,6 +21,7 @@ w_xmodal:   1.0     # cross-modal consistency: visual plural shift ≈ text plur
 
 # --- Logging / output ---
 log_every:    50
+concept_name: plural
 out_dir:      checkpoints/stage2_plurality
 device:       cuda
 seed:         0

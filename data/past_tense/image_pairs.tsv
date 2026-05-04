@@ -1,0 +1,9 @@
+# image_pairs.tsv — visual training pairs for the PAST-TENSE concept operator.
+#
+# Past tense is hard to ground visually with COCO (which doesn't have clean
+# before/after action pairs). For the MVP, train past tense TEXT-ONLY by
+# passing --no-images to scripts/stage2_train.py.
+#
+# If you want to add visual grounding later, populate this file with:
+#   action-in-progress-image-path<TAB>action-completed-image-path<TAB>verb
+# (e.g. paired frames from a video, or before/after photos.)

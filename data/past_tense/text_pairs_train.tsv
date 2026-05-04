@@ -1,0 +1,53 @@
+# Training pairs for the past-tense concept operator.
+# Format: source(present) <TAB> target(past)
+# Mix of regular -ed, semi-regular dental (vowel + t/d), and strong irregulars.
+# Held-out pairs are in text_pairs_held_out.tsv.
+
+# --- Regular -ed (suffix only) ---
+walk	walked
+look	looked
+jump	jumped
+talk	talked
+work	worked
+help	helped
+call	called
+ask	asked
+turn	turned
+move	moved
+love	loved
+open	opened
+live	lived
+watch	watched
+need	needed
+laugh	laughed
+finish	finished
+start	started
+clean	cleaned
+wash	washed
+
+# --- Semi-regular: vowel shortening / dental suffix ---
+keep	kept
+sleep	slept
+feel	felt
+leave	left
+lose	lost
+sit	sat
+build	built
+bring	brought
+
+# --- Strong irregular (vowel ablaut) ---
+eat	ate
+run	ran
+see	saw
+take	took
+give	gave
+come	came
+write	wrote
+choose	chose
+break	broke
+speak	spoke
+drive	drove
+ride	rode
+fall	fell
+sing	sang
+swim	swam

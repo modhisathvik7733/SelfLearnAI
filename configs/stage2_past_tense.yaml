@@ -1,0 +1,32 @@
+# Stage 2 — past-tense concept operator
+# Reference: /Users/chintu/.claude/plans/you-are-a-senior-jazzy-shannon.md sec. 3
+#
+# Past tense is the second concept in the library, used to test whether the
+# architecture generalizes (concept #1 = plurality already validated). For
+# this MVP, past-tense is text-only — pass `--no-images` to scripts/stage2_train.py
+# (or accept the auto-skip when image_pairs.tsv has no entries).
+
+# --- Stage-1 checkpoint (same alignment used by all concepts) ---
+stage1_ckpt: checkpoints/stage1/final.pt
+
+# --- Foundation model names (must match Stage 1) ---
+gte_name:    thenlper/gte-base
+clip_name:   openai/clip-vit-base-patch32
+vjepa_name:  facebook/vjepa2-vitl-fpc16-256-ssv2
+
+# --- Training ---
+epochs:        1500
+lr:            0.001
+weight_decay:  0.0
+
+# --- Loss weights ---
+w_forward:  1.0
+w_inverse:  1.0
+w_xmodal:   1.0     # auto-skipped when no image pairs
+
+# --- Logging / output ---
+log_every:    50
+concept_name: past_tense
+out_dir:      checkpoints/stage2_past_tense
+device:       cuda
+seed:         0

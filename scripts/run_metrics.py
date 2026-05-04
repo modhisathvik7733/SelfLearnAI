@@ -105,15 +105,30 @@ def main() -> None:
     if not eval_pairs:
         sys.exit("eval-pairs is empty.")
 
-    # Read concept data
+    # Read concept data (concept-agnostic; works for any concept dir).
     data_dir = Path(args.data_dir)
-    def _read(path):
-        return [tuple(l.strip().split("\t")[:2]) for l in open(path) if l.strip()]
-    train_pairs = _read(data_dir / "text_pairs_train.tsv")
-    held_out_pairs = _read(data_dir / "text_pairs_held_out.tsv")
-    candidate_pool = [l.strip() for l in open(data_dir / "candidate_pool.txt") if l.strip()]
+    def _read_pairs(path: Path) -> list[tuple[str, str]]:
+        out = []
+        with open(path) as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 2:
+                    out.append((parts[0], parts[1]))
+        return out
+
+    train_pairs = _read_pairs(data_dir / "text_pairs_train.tsv")
+    held_out_pairs = _read_pairs(data_dir / "text_pairs_held_out.tsv")
+    candidate_pool = []
+    with open(data_dir / "candidate_pool.txt") as f:
+        for raw in f:
+            line = raw.strip()
+            if line and not line.startswith("#"):
+                candidate_pool.append(line)
     image_pairs_tsv = data_dir / "image_pairs.tsv"
-    image_pairs = []
+    image_pairs: list[tuple[Path, Path]] = []
     if image_pairs_tsv.exists():
         for l in open(image_pairs_tsv):
             l = l.strip()
@@ -121,7 +136,9 @@ def main() -> None:
                 continue
             parts = l.split("\t")
             if len(parts) >= 2:
-                image_pairs.append((Path(parts[0]), Path(parts[1])))
+                src_p, tgt_p = Path(parts[0]), Path(parts[1])
+                if src_p.exists() and tgt_p.exists():
+                    image_pairs.append((src_p, tgt_p))
 
     # ---- Grounding metrics ----
     print("\n=== Grounding metrics (alignment quality) ===")

@@ -1,0 +1,9 @@
+# Held-out pairs — the model has NEVER seen these during training.
+# Each one tests a different generalization mode:
+
+play	played       # novel regular -ed
+think	thought      # novel dental: -ought
+buy	bought       # novel dental: -ought
+go	went         # suppletion (no morphological relation)
+read	read         # zero-change (orthographic identity, phonological change)
+say	said         # high-frequency irregular
