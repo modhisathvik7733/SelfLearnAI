@@ -402,20 +402,29 @@ def main() -> None:
               f"acc = {ph_best['mean']:.3f}  ({ph_best['params']:,} params)")
     print()
     if sh_best is not None and ph_best is not None:
+        best_overall = max(base["mean"], sh_best["mean"], ph_best["mean"])
         d_routing = sh_best["mean"] - base["mean"]
         d_specialize = ph_best["mean"] - sh_best["mean"]
         print(f"  Δ from adding routing  (single → shared):  {d_routing:+.3f}")
         print(f"  Δ from per-head MLPs  (shared → per-head): {d_specialize:+.3f}")
         print()
-        if ph_best["mean"] - base["mean"] > 0.20:
+        if best_overall >= 0.95:
+            print(f"  → CEILING REACHED. Best architecture hits {best_overall:.3f} — "
+                  f"multi-axial")
+            print("    concepts are solved at this data design. Single-head is",
+                  "already near-perfect;" if base["mean"] >= 0.90
+                  else "multi-head provides")
+            print(f"    {'multi-head provides only seed stability over single-head.' if base['mean'] >= 0.90 else 'a meaningful lift over single-head.'}")
+        elif ph_best["mean"] - base["mean"] > 0.20:
             print("  → Multi-head BREAKS the multi-axial limit. Routing + specialization")
             print("    let the operator span disjoint antonym axes.")
         elif sh_best["mean"] - base["mean"] > 0.20:
             print("  → Routing alone is enough. Per-head residuals add no extra signal —")
             print("    the K direction-vectors do all the work.")
         else:
-            print("  → Multi-head does NOT clear the floor. The bottleneck is in the")
-            print(f"    encoder geometry itself ({args.encoder}). Try richer encoder.")
+            print("  → Multi-head does NOT clear the floor at this data design.")
+            print(f"    The bottleneck is encoder topology ({args.encoder}) for these")
+            print("    held-outs. Curate held-outs / pool further, or fine-tune encoder.")
 
 
 if __name__ == "__main__":
