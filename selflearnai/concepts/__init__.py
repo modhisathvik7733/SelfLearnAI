@@ -1,3 +1,15 @@
-from .operator import ConceptOperator, InverseConceptOperator, ConceptLibrary
+from .operator import (
+    ConceptOperator,
+    InverseConceptOperator,
+    MultiHeadConceptOperator,
+    MultiHeadInverseConceptOperator,
+    ConceptLibrary,
+)
 
-__all__ = ["ConceptOperator", "InverseConceptOperator", "ConceptLibrary"]
+__all__ = [
+    "ConceptOperator",
+    "InverseConceptOperator",
+    "MultiHeadConceptOperator",
+    "MultiHeadInverseConceptOperator",
+    "ConceptLibrary",
+]
