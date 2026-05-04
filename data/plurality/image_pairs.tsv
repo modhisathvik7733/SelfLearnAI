@@ -1,0 +1,20 @@
+# image_pairs.tsv — visual training pairs for plurality concept grounding.
+# Format (tab-separated):
+#   one_object_image_path	many_objects_image_path	noun
+#
+# How to populate:
+#   Option A — From COCO: filter COCO val2017 by `instances_val2017.json` for
+#     images with exactly 1 instance of a category vs ≥3 instances. The
+#     selflearnai.grounding.data_coco.load_coco_samples function exposes the
+#     count metadata you need.
+#   Option B — Synthesize: use any tool (ImageMagick, Blender, matplotlib,
+#     or even our toy selflearn.py scene grids) to render N copies of an
+#     icon. Quick if real images are unavailable.
+#   Option C — Hand-curated: pull 1-cat and 3-cats images from any dataset
+#     (LAION, OpenImages) and label by hand.
+#
+# Target: ~200 pairs covering ~20 nouns.
+# Below: a placeholder template — replace with real paths.
+
+# /data/plurality/cat_one.jpg	/data/plurality/cat_many.jpg	cat
+# /data/plurality/dog_one.jpg	/data/plurality/dog_many.jpg	dog

@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.Python
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Project artifacts (training output, datasets — keep repo lean)
+checkpoints/
+runs/
+logs/
+wandb/
+*.pt
+*.ckpt
+
+# COCO and other large datasets that may land in /data while developing
+data/coco/
+data/raw/
+
+# Pip / build / dist
+build/
+dist/
+
+# Coverage / pytest
+.coverage
+htmlcov/
+.pytest_cache/

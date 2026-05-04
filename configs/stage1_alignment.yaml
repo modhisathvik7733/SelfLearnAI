@@ -1,0 +1,39 @@
+# Stage 1 — star-topology adapter alignment
+# Reference: /Users/chintu/.claude/plans/you-are-a-senior-jazzy-shannon.md sec. 2
+
+# --- Data ---
+coco_root: /data/coco               # CHANGE: path to your COCO root on the GPU box
+coco_split: val2017                 # use val2017 for the curated subset; train2017 for fuller
+max_samples: 30000                  # ~6K images × 5 captions ≈ 30K samples
+
+# --- Foundation model names ---
+gte_name:    thenlper/gte-base
+clip_name:   openai/clip-vit-base-patch32
+vjepa_name:  facebook/vjepa2-vitl-fpc16-256-ssv2
+
+# --- Training ---
+steps:                  2000
+batch_size:             64
+lr:                     0.0001
+weight_decay:           0.01
+grad_clip:              1.0
+temperature:            0.07
+hard_negatives_per_modality: 64
+memory_bank_size:       4096
+min_categories:         4
+min_count_levels:       3
+
+# --- Loss weights (locked: only InfoNCE + VICReg in Stage 1) ---
+w_align_text:    1.0
+w_align_vision:  1.0
+w_vicreg_text:   1.0
+w_vicreg_vision: 1.0
+w_vicreg_anchor: 1.0
+vicreg_proj_dim: 768
+
+# --- Logging / output ---
+log_every:    50
+ckpt_every:   500
+out_dir:      checkpoints/stage1
+device:       cuda
+seed:         0
