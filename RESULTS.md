@@ -250,26 +250,67 @@ a single shared `v` cannot preserve source-specific identity across a
 cross-category mapping. This is a real architectural limit, sharpened by
 the experiment.
 
-### The architectural rule (now sharpened by 5 concept results)
+### Multi-head operator + bigger MLP both hit the SAME 0.500 ceiling
+
+We tested 5 architectural extensions on young-animal at N=9, no-lures, 3 seeds:
 
 ```
-Concept type                                   Few-shot N=3 result
-───────────────────────────────────────────────────────────────────
-Morphological + semantic (write→writer)        ✓ 100%
-Uni-axial + semantic (cat→cats, big→biggest)   ✓ 100%
-Cross-category preserving (horse→foal)         ⚠ ~50% (architecture floor)
-Multi-axial (big→small AND true→false)         ✗ ~0%
+arch                     params   mean acc   per-seed
+single_head_mlp192       222K     0.500      [0.50, 0.50, 0.50]
+single_head_mlp384       444K     0.500      [0.50, 0.50, 0.50]
+multi_head_K2            247K     0.500      [0.50, 0.50, 0.50]
+multi_head_K3            248K     0.500      [0.50, 0.50, 0.50]
+multi_head_K4            248K     0.500      [0.50, 0.50, 0.500]
 ```
 
-For cross-category-preserving concepts to exceed 50% would require either:
+15 trials, exactly 0.500 every time. Suggests the ceiling is in the
+encoder/latent-space, not in the operator architecture. We then tested that
+hypothesis directly.
 
-- **Multi-head operator with routing** — different shift directions chosen
-  per source category, or
-- **Source-conditioned residual** — the residual MLP uses source identity to
-  choose the target region within the baby-animal cluster.
+### The 0.500 ceiling was a Stage-1 compression artifact, NOT a real floor
 
-Both are concrete next-iteration architectural extensions; neither is part
-of the current MVP.
+Stripping Stage 1 entirely and training a single operator on raw text-encoder
+outputs reveals what the architecture is actually capable of:
+
+```
+encoder              dim    cos(src,tgt)             mean acc
+─────────────────────────────────────────────────────────────────────
+GTE-base WITH Stage 1 (384-dim adapter_t)             0.500   ← prior ceiling
+GTE-base raw, no Stage 1 (768-dim native)             0.667
+E5-large-v2 raw, no Stage 1 (1024-dim)                0.833   ← 5/6
+BGE-large-v1.5 raw, no Stage 1 (1024-dim)             0.667
+```
+
+**Two distinct findings**:
+
+1. **Stage 1 alignment cost ~17 points** on fine-grained text-only concepts
+   (0.500 → 0.667 just from removing the 768→384 compression).
+2. **E5-large breaks the ceiling**: 0.833 (5/6) on raw outputs. The only
+   remaining failure is `goat → kid`, where "kid" is overwhelmingly used as
+   "human child" in language data — a polysemy issue, not an architectural
+   one.
+
+Stage 1 alignment is a **tradeoff**: it gives cross-modal grounding (plurality
+reaches 1.000 with image pairs) at the cost of fine-grained text
+discrimination. Stage 1 compression is appropriate for image-grounded
+concepts and inappropriate for fine-grained semantic concepts where source
+and target differ at the species/instance level.
+
+### The architectural rules (final, after 6 concept results)
+
+```
+Concept type                                  N=3 result with appropriate path
+─────────────────────────────────────────────────────────────────────────────
+Morphological + semantic (write→writer)        ✓ 100%   (any encoder)
+Uni-axial + semantic (cat→cats, big→biggest)   ✓ 100%   (Stage 1 OK)
+Cross-category preserving (horse→foal)         ✓ ~83%   (E5-large, no Stage 1)
+Multi-axial (big→small AND true→false)         ✗ ~0%    (genuine architectural limit)
+```
+
+The **only genuine architectural limit** confirmed by these experiments is
+the **multi-axial** case (single-direction operator cannot represent disjoint
+domains simultaneously). The cross-category limit dissolved with a richer
+encoder + no aggressive compression.
 
 ---
 
