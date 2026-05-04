@@ -3,6 +3,8 @@ from .operator import (
     InverseConceptOperator,
     MultiHeadConceptOperator,
     MultiHeadInverseConceptOperator,
+    MultiHeadConceptOperatorPerHead,
+    MultiHeadInverseConceptOperatorPerHead,
     ConceptLibrary,
 )
 
@@ -11,5 +13,7 @@ __all__ = [
     "InverseConceptOperator",
     "MultiHeadConceptOperator",
     "MultiHeadInverseConceptOperator",
+    "MultiHeadConceptOperatorPerHead",
+    "MultiHeadInverseConceptOperatorPerHead",
     "ConceptLibrary",
 ]

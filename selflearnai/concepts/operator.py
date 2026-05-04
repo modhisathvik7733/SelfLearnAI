@@ -165,6 +165,87 @@ class MultiHeadInverseConceptOperator(MultiHeadConceptOperator):
     pass
 
 
+class MultiHeadConceptOperatorPerHead(nn.Module):
+    """Multi-head operator with PER-HEAD residual MLPs.
+
+    The shared-residual variant (`MultiHeadConceptOperator`) shares one
+    residual MLP across all K heads — each head is a direction + alpha,
+    but the content-sensitive non-linearity is common. That keeps params
+    low and works when the K axes are kinematically similar (e.g.,
+    young-animal sub-species), but it caps how strongly each head can
+    specialize.
+
+    Per-head variant: K independent residual MLPs. Each head is
+    (v_k, alpha_k, residual_mlp_k). Same router. The forward pass
+    blends the K head outputs by router weights:
+
+        delta_k(z) = alpha_k * v_k + residual_mlp_k([z; v_k])
+        delta(z)   = sum_k weights_k * delta_k(z)
+
+    Use when the axes covered by the K heads are SEMANTICALLY DISJOINT
+    (e.g., antonym families: size, temperature, truth, emotion). Each
+    head's MLP can learn axis-specific non-linearities that a shared
+    MLP couldn't compress.
+
+    Cost: K × MLP params instead of 1 × MLP. For K=4, D=384,
+    hidden=192 that's roughly 4× the residual params (~600K instead of
+    ~150K) — still tiny.
+    """
+
+    def __init__(
+        self,
+        dim: int = SHARED_DIM,
+        num_heads: int = 3,
+        router_hidden: int = 64,
+        mlp_hidden: int = 192,
+    ):
+        super().__init__()
+        self.num_heads = num_heads
+        self.v = nn.Parameter(torch.randn(num_heads, dim) * 0.02)
+        self.alpha = nn.Parameter(torch.ones(num_heads))
+        self.router = nn.Sequential(
+            nn.Linear(dim, router_hidden),
+            nn.GELU(),
+            nn.Linear(router_hidden, num_heads),
+        )
+        # K independent residual MLPs.
+        self.residuals = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(2 * dim, mlp_hidden),
+                nn.GELU(),
+                nn.Linear(mlp_hidden, dim),
+            )
+            for _ in range(num_heads)
+        ])
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        """z: (..., dim) → (..., dim)."""
+        weights = torch.softmax(self.router(z), dim=-1)              # (..., K)
+
+        # Per-head delta. Each is shape (..., D).
+        deltas = []
+        for k in range(self.num_heads):
+            v_k = self.v[k].expand_as(z)                              # (..., D)
+            d_k = self.alpha[k] * self.v[k] + self.residuals[k](
+                torch.cat([z, v_k], dim=-1)
+            )
+            deltas.append(d_k)
+        # Stack to (..., K, D), weight by router, sum over K.
+        deltas = torch.stack(deltas, dim=-2)                          # (..., K, D)
+        delta = (weights.unsqueeze(-1) * deltas).sum(dim=-2)          # (..., D)
+        return z + delta
+
+    @torch.no_grad()
+    def head_assignments(self, z: torch.Tensor) -> torch.Tensor:
+        return torch.softmax(self.router(z), dim=-1)
+
+
+class MultiHeadInverseConceptOperatorPerHead(MultiHeadConceptOperatorPerHead):
+    """Per-head residual inverse operator. Same architecture as
+    MultiHeadConceptOperatorPerHead, trained on REVERSED pairs."""
+    pass
+
+
 class ConceptLibrary(nn.Module):
     """Holds a registered set of named operators for sequential or composed use.
 
