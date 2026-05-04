@@ -1,0 +1,49 @@
+# Training pairs for the COMPARATIVE concept operator.
+# Format: source(positive) <TAB> target(comparative)
+# Uni-axial concept: each pair represents "more of the same property".
+# This is the architectural sweet spot — should work like plurality + past tense.
+
+# --- Physical / size ---
+big	bigger
+small	smaller
+tall	taller
+short	shorter
+wide	wider
+narrow	narrower
+deep	deeper
+shallow	shallower
+thick	thicker
+thin	thinner
+heavy	heavier
+light	lighter
+
+# --- Speed / motion ---
+fast	faster
+slow	slower
+
+# --- Temperature ---
+hot	hotter
+cold	colder
+
+# --- Age / time ---
+old	older
+new	newer
+young	younger
+
+# --- Strength / quality ---
+strong	stronger
+weak	weaker
+hard	harder
+soft	softer
+
+# --- Sensory ---
+loud	louder
+quiet	quieter
+bright	brighter
+dim	dimmer
+
+# --- Emotional / evaluative (still gradable on one axis) ---
+happy	happier
+sad	sadder
+rich	richer
+poor	poorer

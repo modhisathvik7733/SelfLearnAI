@@ -1,0 +1,4 @@
+# image_pairs.tsv — visual pairs for the COMPARATIVE concept (placeholder).
+# Could be populated with (smaller-X-image, bigger-X-image) pairs from
+# datasets that include scale variation. Out of scope for the MVP.
+# Pass --no-images to scripts/stage2_train.py.

@@ -1,0 +1,9 @@
+# Held-out comparative pairs — the model has never seen these.
+# Each tests cross-domain transfer of the "intensification" operator.
+
+warm	warmer            # temperature, novel item
+cool	cooler            # temperature, novel item
+sharp	sharper           # quality, novel domain
+fresh	fresher           # state, novel domain
+clear	clearer           # quality, novel domain
+calm	calmer            # emotion, novel domain
