@@ -1,7 +1,61 @@
 # SelfLearnAI — Validated Results
 
+## Abstract
+
+A concept-learning architecture in which **concepts are vector-space directions
+in a frozen text encoder's latent space**. Each concept operator is a tiny
+learned shift `(v, residual_MLP)` of ~150K parameters, trained on as few as
+3 (source, target) pairs. The system reaches **1.000 held-out transfer with
+N=3 training pairs on 5 of 6 concept types tested** (plurality, past tense,
+comparative, agentive, superlative — only multi-axial concepts like antonyms
+fail, hitting a documented architectural floor). Operators are essentially
+additive linear shifts (`cos(linear-chain, MLP-chain) = 0.983`), individually
+invertible (`cos = 0.99`), and **independently-trained operators compose
+into chained transformations at 6/6 on held-out chains**. No autoregressive
+prediction at any layer; inference is nearest-neighbor lookup over a
+candidate vocabulary. Total compute for the full evaluation: ~1 hour on a
+single RTX 5090.
+
+## TL;DR
+
+| Claim | Number |
+|---|---|
+| Concepts learnable from N=3 examples | **1.000 held-out transfer** on 5/6 concept types |
+| Concepts compose without joint training | **6/6** chained accuracy (agentive ∘ plural) |
+| Operators are additive linear shifts | `cos(linear, MLP) = 0.983` |
+| Operators are individually invertible | `cos(inverse(forward(z)), z) = 0.990` |
+| Single architectural limit | Multi-axial concepts (~0%) — single direction can't span disjoint axes |
+| End-to-end runtime on 1 GPU | ~25 min (full pipeline, single RTX 5090) |
+| Cost per full reproduction | ~$0.20 of GPU time |
+
+## What this is
+
+```
+                       FROZEN
+                  ┌─────────────────┐
+       text  ──→  │  GTE-base /E5   │  ──→  z ∈ ℝ^d  (raw encoder embedding)
+                  └─────────────────┘
+                         │
+                         ▼
+            ┌────────────────────────┐
+            │   CONCEPT OPERATOR     │   trained on N=3+ pairs
+            │   z' = z + α·v + MLP   │   (~150K params)
+            └────────────────────────┘
+                         │
+                         ▼
+                z'  ──→  nearest-neighbor over candidate pool
+                          (no autoregressive generation)
+```
+
+Each concept is a learned **direction `v ∈ ℝ^d`** in the encoder's latent
+space. Different concepts add: `plural(agentive(z)) ≈ z + v_agentive + v_plural`.
+The system learns concepts as a **vector-space algebra**, not as next-token
+prediction.
+
+---
+
 This document records the empirical results of the system as of 2026-05-04
-(commit `55b522f`). Numbers are reproducible by following [RUNBOOK.md](RUNBOOK.md)
+(commit `aa68c5e`). Numbers are reproducible by following [RUNBOOK.md](RUNBOOK.md)
 and the run order in this file.
 
 The architecture, design rules, and known fragilities are documented separately
@@ -499,6 +553,49 @@ following:
   visual pairs for actions and degrees.
 - **All evaluations on small held-out sets (6 items per concept).** Larger
   held-out sets would tighten confidence intervals.
+
+---
+
+## Future work
+
+Concrete next experiments, ordered by leverage:
+
+**1. Multi-axial concepts via mixture-of-operators.** The remaining real
+architectural limit is that a single shared `v` can't represent disjoint
+domains (size + temperature + truth simultaneously). A natural fix:
+mixture-of-experts at the operator level, where each expert is a single-
+direction operator and the router selects per-input based on inferred
+domain. Tests whether multi-axial concepts are merely a routing problem on
+top of single-direction primitives.
+
+**2. Longer composition chains.** We validated 2-step composition
+(`agentive ∘ plural` at 6/6). Does accuracy degrade with chain length?
+Test 3- and 4-step chains where they linguistically exist (e.g., "agent ∘
+plural ∘ possessive" → "the writers' "). If accuracy holds at depth ≥ 3,
+the algebraic-composition claim strengthens substantially.
+
+**3. Open-vocabulary decoding.** Current inference is nearest-neighbor
+over a closed candidate pool. Replace with energy-based search in
+continuous embedding space, or attach a small text decoder that
+generates the closest spelled form to a target embedding. Removes the
+"crutch" called out in section 2 of the limits.
+
+**4. Apply to a real reasoning task.** With the algebraic structure
+validated, applying the architecture to analogies (`scripts/analogy_demo.py`
+in this repo) and family-relation puzzles tests whether concept algebra
+generalizes from "single-pair learning" to "multi-step structured
+inference." This is the bridge from "concept-learning architecture" to
+"reasoning architecture."
+
+**5. Multimodal grounding for non-image concepts.** Past tense, comparative,
+and other non-visual concepts could be grounded in temporal/sensor data
+(audio for past, video for action, force-sensor for comparative). Tests
+whether the architecture generalizes beyond image-text grounding.
+
+**6. Scale to larger vocabularies.** Current candidate pools are 30–100
+words. Test with 10K+ vocabulary (e.g., common English nouns) — does
+nearest-neighbor decoding still find the right target, or does noise
+dominate?
 
 ---
 
