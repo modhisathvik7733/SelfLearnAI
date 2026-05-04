@@ -42,6 +42,11 @@ from selflearnai.concepts import ConceptOperator, InverseConceptOperator
 from selflearnai.foundations import FrozenGTE
 
 
+def _strip_comment(s: str) -> str:
+    idx = s.find("#")
+    return (s[:idx] if idx >= 0 else s).strip()
+
+
 def _read_pairs(path: Path) -> list[tuple[str, str]]:
     out = []
     with open(path) as f:
@@ -51,7 +56,10 @@ def _read_pairs(path: Path) -> list[tuple[str, str]]:
                 continue
             parts = line.split("\t")
             if len(parts) >= 2:
-                out.append((parts[0], parts[1]))
+                src = _strip_comment(parts[0])
+                tgt = _strip_comment(parts[1])
+                if src and tgt:
+                    out.append((src, tgt))
     return out
 
 

@@ -43,8 +43,18 @@ from selflearnai.concepts.train_concept import (
 )
 
 
+def _strip_inline_comment(s: str) -> str:
+    """Strip an inline `#…` comment from a field, then strip surrounding spaces."""
+    idx = s.find("#")
+    return (s[:idx] if idx >= 0 else s).strip()
+
+
 def _read_tsv_pairs(path: Path) -> list[tuple[str, str]]:
-    """Read (source, target) tab-separated pairs. Skips blanks + # comments."""
+    """Read (source, target) tab-separated pairs.
+    Skips blank lines and full-line `#` comments. Also strips INLINE `#…`
+    comments from each field — so `walked\\t # regular` is parsed correctly
+    and so is `play\\tplayed       # novel regular -ed`.
+    """
     out: list[tuple[str, str]] = []
     with open(path) as f:
         for raw in f:
@@ -54,7 +64,10 @@ def _read_tsv_pairs(path: Path) -> list[tuple[str, str]]:
             parts = line.split("\t")
             if len(parts) < 2:
                 continue
-            out.append((parts[0], parts[1]))
+            src = _strip_inline_comment(parts[0])
+            tgt = _strip_inline_comment(parts[1])
+            if src and tgt:
+                out.append((src, tgt))
     return out
 
 
