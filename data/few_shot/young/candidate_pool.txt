@@ -1,4 +1,13 @@
-# Pool: all training + held-out targets + baby-animal distractors + adult-animal lures.
+# Candidate pool for the young-animal concept — BABY animals only.
+#
+# Earlier versions of this file included adult animals as distractors,
+# which we discovered (scripts/few_shot_young_followup.py) was a flawed
+# test design: the operator's shift cannot easily escape the source's
+# own embedding when the source is itself a candidate. The "0.50 ceiling"
+# we initially attributed to the architecture turned out to be a pool-
+# design artifact + Stage 1 compression artifact. With this no-lures
+# pool, raw E5-large reaches 5/6 on held-out (see RESULTS.md).
+
 puppy
 kitten
 calf
@@ -15,8 +24,6 @@ joey
 tadpole
 caterpillar
 fledgling
-calf
-calf
 cygnet
 hatchling
 fry
@@ -25,33 +32,3 @@ nestling
 larva
 embryo
 infant
-
-# Adult-animal lures (so the model has to pick the BABY, not the adult)
-dog
-cat
-cow
-horse
-deer
-bear
-sheep
-goat
-pig
-chicken
-duck
-goose
-kangaroo
-frog
-butterfly
-bird
-fish
-human
-swan
-turtle
-rabbit
-fox
-wolf
-eagle
-elephant
-lion
-tiger
-zebra
