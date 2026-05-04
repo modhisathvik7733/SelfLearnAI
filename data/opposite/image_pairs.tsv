@@ -1,0 +1,4 @@
+# image_pairs.tsv — visual training pairs for the OPPOSITE concept.
+#
+# Antonyms are abstract; we don't ground them visually for this MVP.
+# Pass --no-images to scripts/stage2_train.py for text-only training.

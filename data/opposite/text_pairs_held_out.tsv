@@ -1,0 +1,9 @@
+# Held-out antonym pairs — the model has never seen these in training.
+# Each tests whether the "opposite" operator generalizes to novel domains.
+
+near	far              # spatial — novel domain
+warm	cool             # temperature — softer than hot/cold
+fresh	stale            # quality of food/air — novel domain
+calm	angry            # emotion — novel domain
+peace	war              # abstract noun — novel domain
+truth	lie              # epistemic — novel domain
