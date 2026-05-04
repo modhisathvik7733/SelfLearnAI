@@ -93,11 +93,14 @@ class Sample:
     image_id : opaque identifier; loader resolves it to a PIL.Image lazily.
     category : top-level semantic group (e.g., 'animal', 'object', 'place').
     count    : number of countable entities in the visual scene (1, 2, 3, ...).
+    idx      : position in the original samples list — used by the cached
+               trainer to gather precomputed features by row index.
     """
     text: str
     image_id: str
     category: str
     count: int
+    idx: int = -1
 
 
 class StratifiedBatchBuilder:

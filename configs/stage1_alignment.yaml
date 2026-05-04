@@ -40,6 +40,15 @@ vicreg_proj_dim: 768
 #         small lr; only set False if you really know why.
 freeze_anchor: true
 
+# --- Cached features ---
+# If non-empty, skip foundation forward passes and read precomputed
+# (gte, clip_text, clip_vision, vjepa_patches) tensors from this directory.
+# Generate with: scripts/precompute_features.py
+# This is the recommended path — turns ~3s/step (image-loading bottleneck)
+# into ~50ms/step (tensor slice + adapter MLP).
+# Empty string = live encoding (slower, useful for ad-hoc inputs).
+cache_dir: ""
+
 # --- Logging / output ---
 log_every:    50
 ckpt_every:   500

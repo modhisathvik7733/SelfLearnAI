@@ -134,6 +134,7 @@ def load_coco_samples(
                 image_id=str(img_id),
                 category=category,
                 count=count,
+                idx=len(samples),
             ))
 
         if max_samples is not None and len(samples) >= max_samples:
