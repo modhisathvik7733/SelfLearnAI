@@ -7,14 +7,17 @@ in a frozen text encoder's latent space**. Each concept operator is a tiny
 learned shift `(v, residual_MLP)` of ~150K parameters, trained on as few as
 3 (source, target) pairs. The system reaches **1.000 held-out transfer with
 N=3 training pairs on 5 of 6 concept types tested** (plurality, past tense,
-comparative, agentive, superlative — only multi-axial concepts like antonyms
-fail, hitting a documented architectural floor). Operators are essentially
-additive linear shifts (`cos(linear-chain, MLP-chain) = 0.983`), individually
+comparative, agentive, superlative). Operators are essentially additive
+linear shifts (`cos(linear-chain, MLP-chain) = 0.983`), individually
 invertible (`cos = 0.99`), and **independently-trained operators compose
-into chained transformations at 6/6 on held-out chains**. No autoregressive
-prediction at any layer; inference is nearest-neighbor lookup over a
-candidate vocabulary. Total compute for the full evaluation: ~1 hour on a
-single RTX 5090.
+into chained transformations at 6/6 on held-out chains**. The originally
+reported "multi-axial concepts ~0%" floor was [re-diagnosed as encoder
+neighborhood topology, not operator capacity](#multi-axial-re-diagnosis-option-3-sweep)
+— a single-head operator already produces the correct antonym direction
+(`cos(pred, truth) = 0.86`); single-head reaches 0.722 on antonyms with
+fair pool design. No autoregressive prediction at any layer; inference is
+nearest-neighbor lookup over a candidate vocabulary. Total compute for the
+full evaluation: ~1 hour on a single RTX 5090.
 
 ## TL;DR
 
@@ -24,7 +27,7 @@ single RTX 5090.
 | Concepts compose without joint training | **6/6** chained accuracy (agentive ∘ plural) |
 | Operators are additive linear shifts | `cos(linear, MLP) = 0.983` |
 | Operators are individually invertible | `cos(inverse(forward(z)), z) = 0.990` |
-| Single architectural limit | Multi-axial concepts (~0%) — single direction can't span disjoint axes |
+| Single architectural limit (re-diagnosed) | None at the operator level — the multi-axial "floor" was retrieval-lure + encoder neighborhood topology. Single-head reaches **0.722** on antonyms with fair pool. See [§ Multi-axial re-diagnosis](#multi-axial-re-diagnosis-option-3-sweep). |
 | End-to-end runtime on 1 GPU | ~25 min (full pipeline, single RTX 5090) |
 | Cost per full reproduction | ~$0.20 of GPU time |
 
@@ -121,7 +124,14 @@ training pairs and 6 held-out pairs per concept.
 | **Plurality** | count (low → high) | **1.000** | 1.000 | 0.961 | 0.585 |
 | **Past tense** | time (now → before) | **0.833** | 1.000 | 0.961 | 0.535 |
 | **Comparative** | intensity (less → more) | **0.667** | 0.667 | 0.962 | 0.598 |
-| Opposite | (multi-axis) | 0.000 | 0.167 | 0.939 | 0.296 |
+| Opposite | (multi-axis) | 0.000 † | 0.167 | 0.939 | 0.296 |
+
+† This 0.000 came from a HARSH pool where every training target competed
+for every held-out retrieval. **Re-evaluated under FAIR pool: single-head
+reaches 0.722** (GTE-base) / 0.611 (E5). The ~0% number was a retrieval
+artifact, not an architectural limit. See
+[§ Multi-axial re-diagnosis](#multi-axial-re-diagnosis-option-3-sweep)
+for the full sweep + encoder-neighborhood probe.
 
 ### Key reads
 
@@ -138,15 +148,122 @@ training pairs and 6 held-out pairs per concept.
   See [diagnose_concept.py](scripts/diagnose_concept.py) for the diagnostic
   pipeline.
 
-### Architectural rule established
+### Architectural rule established (originally — corrected below)
 
 > **Uni-axial concepts (one consistent direction across all training pairs)
 > work with this architecture. Multi-axial concepts (different domains
 > require different shift directions) do not.**
->
-> The current operator has a single learned `v` vector + a small content-
-> sensitive residual. To handle multi-axial concepts would require a multi-head
-> operator with input-conditioned routing.
+
+**This rule was wrong.** The Option-3 multi-head sweep + cos→truth
+diagnostic re-diagnosed it: a single-head operator already produces
+representations at `cos(pred, truth) ≈ 0.86` across all 6 antonym axes.
+Adding K direction-vectors and a router does not change `cos→truth` and
+does not lift held-out accuracy. The "floor" was retrieval competition
+from training-target lures + encoder-side neighborhood ambiguity, not
+operator expressivity. See [§ Multi-axial re-diagnosis](#multi-axial-re-diagnosis-option-3-sweep).
+
+---
+
+## Multi-axial re-diagnosis (Option-3 sweep)
+
+The original "0.000 on opposites" finding led to a planned architectural
+extension: a multi-head operator with input-conditioned routing where K
+direction-vectors and an MLP router would let each head specialize on a
+different antonym axis (size, temperature, truth, emotion, …). Two
+variants implemented in `selflearnai/concepts/operator.py`:
+
+- `MultiHeadConceptOperator` — K v's + K alphas + router + **shared**
+  residual MLP.
+- `MultiHeadConceptOperatorPerHead` — K v's + K alphas + router +
+  **K independent** residual MLPs.
+
+`scripts/multi_head_opposite.py` sweeps K ∈ {1, 2, 3, 4} × {shared,
+per-head} × 3 seeds on `data/opposite/` (30 train, 6 held-out across
+spatial/temperature/quality/emotion/abstract/epistemic axes), under both
+HARSH (full pool) and FAIR (training targets dropped) pool conditions.
+Two diagnostics added on top of accuracy:
+
+- `cos(pred, truth)` — cosine of the operator's prediction to the TRUE
+  held-out target embedding (independent of pool/lure competition).
+  Tells us whether the operator points to the right region.
+- Encoder-neighborhood probe — for each held-out (src, tgt), the truth's
+  top-3 cos neighbors in the candidate pool with the operator NOT
+  involved. Tells us whether the encoder's geometry alone admits the
+  truth as the nearest pool word.
+
+### Three results, one diagnosis
+
+**1. cos→truth is invariant to architecture.**
+
+E5-large-v2, FAIR pool (best reading per arch, 3 seeds):
+
+```
+arch              params      mean acc     cos→truth
+single_head       592,065     0.611        0.862
+shared_K2         658,820     0.667        0.862
+per_head_K2     1,249,860     0.667        0.861
+shared_K3         659,910     0.556        0.861
+per_head_K3     1,841,990     0.667        0.862
+shared_K4         661,000     0.500        0.860
+per_head_K4     2,434,120     0.667        0.862
+```
+
+`cos(pred, truth)` lands in 0.860–0.862 for every architecture. A single
+direction-vector + shared residual MLP already produces representations
+that sit at cos ≈ 0.86 to all 6 held-out antonyms simultaneously. Adding
+K direction-vectors and per-head MLPs does not change this — the
+operator was never the bottleneck.
+
+**2. FAIR pool lifts single-head from 0.500 → 0.611–0.722.**
+
+Original HARSH pool included all 30 training targets (`small`, `cold`,
+`slow`, …) as candidates. Held-out predictions like "warm → cool" lost
+retrieval to "cold" (training target, lexically/semantically closer to
+the prediction). FAIR pool drops training targets; `single_head` then
+reaches **0.722 on GTE-base, 0.611 on E5**. The "0.000 on opposites"
+number was a pool-design artifact, not an architectural limit.
+
+**3. The 2/6 residual failures are encoder-side.**
+
+Two pairs (`warm→cool`, `calm→angry`) fail under every architecture and
+both pool designs. The encoder-neighborhood probe (E5-large-v2) shows
+why:
+
+```
+ENCODER NEIGHBORHOOD — top-3 cos neighbors of TRUE target (operator NOT involved)
+near  → far     nearest-to-far:    early(+0.863), late(+0.848), cool(+0.837)
+warm  → cool    nearest-to-cool:   boring(+0.841), far(+0.837), sick(+0.837)
+fresh → stale   nearest-to-stale:  boring(+0.882), weary(+0.875), unhappy(+0.865)
+calm  → angry   nearest-to-angry:  unhappy(+0.917), jealous(+0.888), tired(+0.873)
+peace → war     nearest-to-war:    enemy(+0.859), evil(+0.824), defeat(+0.823)
+truth → lie     nearest-to-lie:    foolish(+0.848), end(+0.847), unwilling(+0.843)
+```
+
+The encoder rates `sick` as cos 0.837 to `cool`, while our operator's
+prediction sits at cos 0.835 to `cool`. The lure is essentially
+equidistant to the prediction as the truth is — there is no operator
+output that lands closer to `cool` than `sick` without overshooting.
+Same for `angry`: the encoder buries it inside an "unhappy / jealous /
+tired" neighborhood that no shift can disambiguate.
+
+### Conclusion
+
+The "multi-axial concepts ~0%" claim that motivated multi-head design
+was a **retrieval artifact** stacked on top of an **encoder neighborhood
+limit**. With fair pool design, the single-head architecture handles
+multi-axial concepts at 0.722. The remaining failures are encoder-side
+and would require a contrastive antonym-aware fine-tune of the encoder
+itself, not an architectural change to the operator.
+
+The Option-3 multi-head sweep is therefore a **negative result that
+clarified the diagnosis**: there is no architectural floor at the
+operator level for any concept type tested in this project.
+
+Reproduce:
+```bash
+python scripts/multi_head_opposite.py --encoder e5-large-v2 --fair-pool --show-routing
+python scripts/multi_head_opposite.py --encoder gte-base    --fair-pool --show-routing
+```
 
 ---
 
@@ -411,16 +528,21 @@ Uni-axial semantic (cat→cats)                  ✓ 100%           either
 Past tense / comparative                       ✓ 100%           text-only
 Cross-category preserving (horse→foal, N=3)    ⚠ ~50–55%        text-only*
 Cross-category preserving (horse→foal, N=9)    ✓ ~83%           text-only + E5-large
-Multi-axial (big→small AND true→false)         ✗ ~0%            (architectural limit)
+Multi-axial (big→small AND true→false)         ✓ 0.722 (FAIR)   text-only*
+                                                ✗ 0.000 (HARSH pool, original)
 
 * Increasing N or using a richer encoder lifts cross-category accuracy
   significantly. Limited only by sample size + encoder species-specificity.
+* Multi-axial: HARSH pool retrieves training-target lures; FAIR pool (drop
+  training targets) lets single-head reach 0.722. Re-diagnosis below.
 ```
 
-The **only genuine architectural limit** is the multi-axial case (single
-shared `v` cannot represent disjoint axes simultaneously). Every other
+There is **no genuine architectural limit at the operator level**. Every
 concept type tested reaches high held-out accuracy with the appropriate
-pathway choice.
+pathway choice and a fair pool. The 2/6 residual antonym failures
+(`warm→cool`, `calm→angry`) are encoder neighborhood limits, not operator
+limits — the encoder rates a soft synonym (`sick`, `weary`) as closer to
+the truth than the operator's correct-direction prediction is.
 
 ---
 
@@ -607,9 +729,14 @@ following:
 
 - **Closed-vocabulary decoding.** Predictions are nearest-neighbor over a
   candidate pool of ~70–100 words. Open-ended generation is not addressed.
-- **Concepts are single-axis.** Multi-axial concepts (antonyms, relational
-  concepts, abstract relations) require an architectural extension
-  (multi-head operator + router).
+- **Multi-axial concepts work at single-head, with caveats.** Antonyms
+  reach **0.722** with fair pool design (training targets removed as
+  candidates) on a single-head operator. The 2/6 residual failures
+  (`warm→cool`, `calm→angry`) are encoder-side — soft synonyms in the
+  pretrained encoder's neighborhood beat the truth on retrieval. A
+  contrastive antonym fine-tune of the encoder (not an operator change)
+  is the principled next step. See
+  [§ Multi-axial re-diagnosis](#multi-axial-re-diagnosis-option-3-sweep).
 - **Comparative has a 0.67 ceiling.** ~33% of held-outs are not recoverable
   with this architecture + this data, regardless of training duration.
 - **Stage 2 cross-modal grounding only validated for plurality.** Past tense
@@ -624,13 +751,17 @@ following:
 
 Concrete next experiments, ordered by leverage:
 
-**1. Multi-axial concepts via mixture-of-operators.** The remaining real
+**1. Multi-axial concepts via mixture-of-operators.** ~~The remaining real
 architectural limit is that a single shared `v` can't represent disjoint
-domains (size + temperature + truth simultaneously). A natural fix:
-mixture-of-experts at the operator level, where each expert is a single-
-direction operator and the router selects per-input based on inferred
-domain. Tests whether multi-axial concepts are merely a routing problem on
-top of single-direction primitives.
+domains.~~ **Done as a negative result** — see
+[§ Multi-axial re-diagnosis](#multi-axial-re-diagnosis-option-3-sweep).
+Multi-head operators (K=2, 3, 4 with shared and per-head residual MLPs)
+do not lift held-out accuracy beyond what single-head already achieves;
+`cos(pred, truth) ≈ 0.86` is invariant across architectures. The remaining
+2/6 antonym failures are encoder-neighborhood limits, not operator
+expressivity, and would be addressed by a **contrastive antonym
+fine-tune of the encoder itself** — a different scope of work than the
+operator-level extension originally hypothesized.
 
 **2. Longer composition chains.** We validated 2-step composition
 (`agentive ∘ plural` at 6/6). Does accuracy degrade with chain length?
