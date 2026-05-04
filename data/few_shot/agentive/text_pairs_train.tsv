@@ -1,0 +1,6 @@
+# Concept: AGENTIVE (verb → person who does that action)
+# Only 3 training pairs — testing the few-shot claim.
+
+write	writer
+build	builder
+teach	teacher

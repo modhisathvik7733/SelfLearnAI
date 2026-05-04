@@ -1,0 +1,8 @@
+# Concept: YOUNG-ANIMAL (adult animal → its baby form)
+# This is the HARDEST few-shot test: pure semantic mapping with NO consistent
+# morphology. dog→puppy, cat→kitten, cow→calf share zero spelling pattern.
+# If N=3 works here, the architecture has learned a real semantic concept.
+
+dog	puppy
+cat	kitten
+cow	calf

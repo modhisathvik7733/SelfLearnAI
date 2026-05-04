@@ -1,0 +1,6 @@
+# Concept: SUPERLATIVE (adjective → maximally-intensified form, "+est")
+# Only 3 training pairs — testing the few-shot claim.
+
+big	biggest
+fast	fastest
+hot	hottest
