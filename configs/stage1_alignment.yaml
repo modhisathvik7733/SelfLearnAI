@@ -12,14 +12,16 @@ clip_name:   openai/clip-vit-base-patch32
 vjepa_name:  facebook/vjepa2-vitl-fpc16-256-ssv2
 
 # --- Training ---
-steps:                  2000
-batch_size:             64
-lr:                     0.0001
+# Defaults sized for a 24-32 GB GPU (RTX 4090 / 5090 / A100).
+# For a smaller GPU (8-12 GB), drop batch_size to 64.
+steps:                  1000          # halved: bigger batch = fewer steps needed
+batch_size:             256           # 4x bump; 5090 has 32GB, was using 4GB at bs=64
+lr:                     0.0002        # linear-scaled with batch (sqrt-rule, half-strength)
 weight_decay:           0.01
 grad_clip:              1.0
 temperature:            0.07
 hard_negatives_per_modality: 64
-memory_bank_size:       4096
+memory_bank_size:       8192          # bigger bank for the bigger batch
 min_categories:         4
 min_count_levels:       3
 
@@ -28,8 +30,15 @@ w_align_text:    1.0
 w_align_vision:  1.0
 w_vicreg_text:   1.0
 w_vicreg_vision: 1.0
-w_vicreg_anchor: 1.0
+w_vicreg_anchor: 1.0                  # only used if freeze_anchor: false
 vicreg_proj_dim: 768
+
+# --- Anchor policy ---
+# True = adapter_c frozen at init; text/vision adapters distill into a fixed
+#        random projection of CLIP space. Default; no anchor drift possible.
+# False = adapter_c trains under VICReg only. Empirically drifts even with
+#         small lr; only set False if you really know why.
+freeze_anchor: true
 
 # --- Logging / output ---
 log_every:    50

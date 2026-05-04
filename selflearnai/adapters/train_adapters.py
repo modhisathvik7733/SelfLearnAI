@@ -74,8 +74,16 @@ class Stage1Config:
     w_align_vision: float = 1.0
     w_vicreg_text: float = 1.0
     w_vicreg_vision: float = 1.0
-    w_vicreg_anchor: float = 1.0       # passive anchor: ONLY VICReg
+    w_vicreg_anchor: float = 1.0       # only used if freeze_anchor=False
     vicreg_proj_dim: int = 768
+
+    # Anchor policy. When True (default), adapter_c is frozen at random init
+    # and never receives gradient. Star topology then becomes a clean
+    # distillation target: text and vision adapters learn to map into a
+    # FIXED random projection of CLIP space. Empirically: even VICReg
+    # pressure on the anchor drifts it (anchor_cos: 1.00 → 0.66 in 300
+    # steps), so freezing is the safer default.
+    freeze_anchor: bool = True
 
     # Logging / checkpointing
     log_every: int = 50
@@ -122,15 +130,28 @@ class Stage1Trainer:
         self.proj_vision = Projector(SHARED_DIM, cfg.vicreg_proj_dim).to(cfg.device)
         self.proj_anchor = Projector(SHARED_DIM, cfg.vicreg_proj_dim).to(cfg.device)
 
+        # --- Lock the anchor if configured (default: True) ---
+        # Star topology requires adapter_c to be a stable target. Even VICReg
+        # pressure was empirically enough to drift it (anchor_cos collapses
+        # ~1.0 → 0.66 in a few hundred steps). Freezing makes the system a
+        # distillation-into-fixed-projection: text and vision adapters learn
+        # to align with adapter_c's frozen-at-init outputs.
+        if cfg.freeze_anchor:
+            for p in self.bundle.adapter_c.parameters():
+                p.requires_grad_(False)
+            self.bundle.adapter_c.eval()
+
         # --- Optimizer (only trainable modules) ---
-        params = (
-            list(self.bundle.parameters())
-            + list(self.proj_text.parameters())
-            + list(self.proj_vision.parameters())
-            + list(self.proj_anchor.parameters())
-        )
+        trainable = []
+        if not cfg.freeze_anchor:
+            trainable += list(self.bundle.adapter_c.parameters())
+            trainable += list(self.proj_anchor.parameters())
+        trainable += list(self.bundle.adapter_t.parameters())
+        trainable += list(self.bundle.adapter_v.parameters())
+        trainable += list(self.proj_text.parameters())
+        trainable += list(self.proj_vision.parameters())
         self.opt = torch.optim.AdamW(
-            params, lr=cfg.lr, weight_decay=cfg.weight_decay,
+            trainable, lr=cfg.lr, weight_decay=cfg.weight_decay,
         )
 
         # --- Memory banks for hard-negative mining ---
@@ -207,29 +228,37 @@ class Stage1Trainer:
         # --- VICReg per modality (anti-collapse) ---
         L_vic_text = vicreg_loss(self.proj_text(t))
         L_vic_vision = vicreg_loss(self.proj_vision(v))
-        # Anchor: still gets gradient through VICReg (otherwise adapter_c would
-        # never learn anything). Apply VICReg to the projected anchor outputs
-        # for both text and vision sides combined.
-        a_combined = torch.cat([a_text, a_vision], dim=0)
-        L_vic_anchor = vicreg_loss(self.proj_anchor(a_combined))
 
         loss = (
             cfg.w_align_text * L_text
             + cfg.w_align_vision * L_vision
             + cfg.w_vicreg_text * L_vic_text
             + cfg.w_vicreg_vision * L_vic_vision
-            + cfg.w_vicreg_anchor * L_vic_anchor
         )
+
+        # Anchor VICReg: only included when anchor is unfrozen. With the
+        # default freeze_anchor=True path, adapter_c receives no gradient
+        # and the anchor projector is unused.
+        if not cfg.freeze_anchor:
+            a_combined = torch.cat([a_text, a_vision], dim=0)
+            L_vic_anchor = vicreg_loss(self.proj_anchor(a_combined))
+            loss = loss + cfg.w_vicreg_anchor * L_vic_anchor
+        else:
+            L_vic_anchor = torch.tensor(0.0, device=t.device)
 
         self.opt.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            list(self.bundle.parameters())
+        # Grad clip on actually-trainable params only.
+        clip_params = (
+            list(self.bundle.adapter_t.parameters())
+            + list(self.bundle.adapter_v.parameters())
             + list(self.proj_text.parameters())
             + list(self.proj_vision.parameters())
-            + list(self.proj_anchor.parameters()),
-            cfg.grad_clip,
         )
+        if not cfg.freeze_anchor:
+            clip_params += list(self.bundle.adapter_c.parameters())
+            clip_params += list(self.proj_anchor.parameters())
+        torch.nn.utils.clip_grad_norm_(clip_params, cfg.grad_clip)
         self.opt.step()
 
         # --- Update memory banks ---
@@ -285,6 +314,7 @@ class Stage1Trainer:
         print(f"=== Stage 1 — star-topology alignment ===")
         print(f"  device: {cfg.device}   shared_dim: {SHARED_DIM}")
         print(f"  steps: {cfg.steps}   batch: {cfg.batch_size}")
+        print(f"  freeze_anchor: {cfg.freeze_anchor}")
         print(f"  samples: {len(self.samples)}   categories: "
               f"{len({s.category for s in self.samples})}   "
               f"count levels: {len({s.count for s in self.samples})}")
@@ -293,18 +323,25 @@ class Stage1Trainer:
         for step in range(cfg.steps):
             metrics = self.step(step)
             if step % cfg.log_every == 0:
-                drift = self.anchor_drift_cosine() if step > 0 else 1.0
+                if cfg.freeze_anchor:
+                    # Anchor is frozen by construction; drift is trivially 1.0.
+                    drift = 1.0
+                    drift_label = "FROZEN"
+                else:
+                    drift = self.anchor_drift_cosine() if step > 0 else 1.0
+                    drift_label = f"{drift:+.3f}"
+                vic_anchor = metrics['L_vic_anchor']
                 print(
                     f"[step {step:5d}]  loss={metrics['loss']:.4f}  "
                     f"L_text={metrics['L_text']:.3f}  "
                     f"L_vis={metrics['L_vision']:.3f}  "
                     f"L_vic={metrics['L_vic_text']:.2f}/"
-                    f"{metrics['L_vic_vision']:.2f}/{metrics['L_vic_anchor']:.2f}  "
-                    f"anchor_cos={drift:+.3f}"
+                    f"{metrics['L_vic_vision']:.2f}/{vic_anchor:.2f}  "
+                    f"anchor={drift_label}"
                 )
-                if drift < 0.85 and step > 200:
+                if not cfg.freeze_anchor and drift < 0.85 and step > 200:
                     print("  ⚠ anchor drift below 0.85 — star topology compromised. "
-                          "Plan says: freeze adapter_c if this persists.")
+                          "Set freeze_anchor: True in the config and restart.")
             if step > 0 and step % cfg.ckpt_every == 0:
                 self.save(out_dir / f"step_{step}.pt")
 
