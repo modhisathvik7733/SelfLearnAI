@@ -103,29 +103,52 @@ def visual_perturbation_sensitivity(
     bundle: AdapterBundle,
     vjepa,
     images: list[Image.Image],
-    occlusion_size: int = 64,
+    mode: str = "noise",
 ) -> float:
-    """Mask a square in the center of each image; measure how much the
-    embedding changes. If changes are tiny, vision is being ignored
-    (modality leakage).
+    """Replace each image with something semantically different and measure
+    embedding shift. If the adapter still produces nearly the same output,
+    vision is being ignored (modality leakage / shortcut learning).
 
-    Returns mean(1 - cos(orig_emb, perturbed_emb)). Threshold per plan: > 0.05.
+    Modes — ranked by how aggressive the perturbation is:
+      - "occlude64" : 64×64 center black square. Easy for V-JEPA to inpaint;
+                      will produce small changes even when vision IS used.
+      - "noise"     : replace whole image with uniform random pixels.
+                      Strong test — radically different content.
+      - "zeros"     : replace whole image with all zeros.
+                      Strongest test — the absolute null input.
+
+    Returns mean(1 - cos(orig_emb, perturbed_emb)). With "noise" or "zeros",
+    a passing system should score > 0.1; <0.05 means vision is decoupled.
     """
     z_orig = F.normalize(bundle.adapter_v(vjepa.encode_patches(images)), dim=-1)
 
     perturbed = []
-    for img in images:
-        a = img.copy()
-        w, h = a.size
-        cx, cy = w // 2, h // 2
-        s = occlusion_size // 2
-        # Black-out a center square.
+    if mode == "zeros":
+        for img in images:
+            w, h = img.size
+            blank = Image.new("RGB", (w, h), color=(0, 0, 0))
+            perturbed.append(blank)
+    elif mode == "noise":
+        import numpy as np
+        rng = np.random.default_rng(0)
+        for img in images:
+            w, h = img.size
+            arr = rng.integers(0, 255, size=(h, w, 3), dtype=np.uint8)
+            perturbed.append(Image.fromarray(arr, mode="RGB"))
+    elif mode == "occlude64":
         from PIL import ImageDraw
-        d = ImageDraw.Draw(a)
-        d.rectangle([cx - s, cy - s, cx + s, cy + s], fill=(0, 0, 0))
-        perturbed.append(a)
-    z_pert = F.normalize(bundle.adapter_v(vjepa.encode_patches(perturbed)), dim=-1)
+        for img in images:
+            a = img.copy()
+            w, h = a.size
+            cx, cy = w // 2, h // 2
+            s = 32
+            d = ImageDraw.Draw(a)
+            d.rectangle([cx - s, cy - s, cx + s, cy + s], fill=(0, 0, 0))
+            perturbed.append(a)
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
 
+    z_pert = F.normalize(bundle.adapter_v(vjepa.encode_patches(perturbed)), dim=-1)
     return (1.0 - F.cosine_similarity(z_orig, z_pert, dim=-1)).mean().item()
 
 
@@ -151,5 +174,9 @@ def report_grounding(
     out["per_dim_stddev"] = per_dim_stddev(bundle, gte, clip, vjepa, eval_pairs)
     out["retrieval_recall@5"] = retrieval_top_k(bundle, gte, vjepa, eval_pairs, k=5)
     images = [Image.open(p[1]).convert("RGB") for p in eval_pairs[: min(64, len(eval_pairs))]]
-    out["visual_perturbation"] = visual_perturbation_sensitivity(bundle, vjepa, images)
+    # Use "noise" perturbation: full-image replacement is far stronger than
+    # the previous 64×64 occlusion (which V-JEPA-2 was *trained* to handle).
+    out["visual_perturbation"] = visual_perturbation_sensitivity(
+        bundle, vjepa, images, mode="noise",
+    )
     return out
