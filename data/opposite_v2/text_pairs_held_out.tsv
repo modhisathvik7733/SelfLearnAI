@@ -1,0 +1,16 @@
+# Held-out antonym pairs (v2) — curated for cleaner encoder neighborhoods.
+#
+# v1 had 6 pairs; the encoder-neighborhood probe (RESULTS.md) showed two
+# of them (warm→cool, calm→angry) lose retrieval to soft synonyms in pure
+# encoder space, regardless of operator architecture. Those two are
+# REPLACED here with antonym pairs in cleaner domains.
+#
+# v1 retained:
+near	far              # spatial — novel domain
+fresh	stale            # food / quality — novel domain
+peace	war              # abstract noun — novel domain
+truth	lie              # epistemic — novel domain
+#
+# v2 swaps (replacing warm→cool and calm→angry):
+dawn	dusk             # time-of-day — replaces temperature ambiguity
+accept	reject           # decision — replaces emotion ambiguity

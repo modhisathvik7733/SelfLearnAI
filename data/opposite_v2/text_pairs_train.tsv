@@ -1,0 +1,44 @@
+# Training pairs for the OPPOSITE / antonym concept operator (v2).
+# Identical to data/opposite/text_pairs_train.tsv — only held-out + pool
+# were curated for v2 (see README in this dir, RESULTS.md "Multi-axial
+# re-diagnosis").
+
+# --- Concrete physical antonyms ---
+big	small
+hot	cold
+fast	slow
+high	low
+new	old
+open	closed
+clean	dirty
+strong	weak
+sweet	sour
+wet	dry
+deep	shallow
+wide	narrow
+tall	short
+soft	hard
+heavy	light
+sharp	dull
+
+# --- Sensory / quality antonyms ---
+loud	quiet
+bright	dim
+smooth	rough
+
+# --- State / existence antonyms ---
+present	absent
+alive	dead
+empty	full
+visible	hidden
+
+# --- Emotion / evaluative antonyms ---
+happy	sad
+brave	scared
+good	bad
+beautiful	ugly
+
+# --- Truth-value antonyms ---
+true	false
+right	wrong
+yes	no

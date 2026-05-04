@@ -1,0 +1,87 @@
+# Candidate pool for the OPPOSITE concept (v2).
+#
+# v1's pool included encoder-noise distractors that the probe identified
+# as soft synonyms of held-out targets — e.g. boring/weary/sick/foolish
+# all sat at cos > 0.84 to held-out targets in pure encoder space, beating
+# the operator on retrieval no matter what. v2 drops those distractors
+# and keeps only "antonym-of-some-other-word" distractors that are not
+# lexically/semantically adjacent to any held-out target.
+#
+# Held-out targets present in pool: far, stale, war, lie, dusk, reject.
+# Training targets retained (so HARSH pool eval is still meaningful);
+# --fair-pool drops them.
+
+# --- Training targets ---
+small
+cold
+slow
+low
+old
+closed
+dirty
+weak
+sour
+dry
+shallow
+narrow
+short
+hard
+light
+dull
+quiet
+dim
+rough
+absent
+dead
+full
+hidden
+sad
+scared
+bad
+ugly
+false
+wrong
+no
+
+# --- Held-out targets (the answers we're testing) ---
+far
+stale
+war
+lie
+dusk
+reject
+
+# --- Distractors: cleanly-antonym words for OTHER non-test concepts.
+# Excluded from v1: boring, weary, unhappy, sick, tired, jealous, foolish,
+# end, unwilling, early, late, enemy, evil — each was an encoder neighbor
+# of a held-out target.
+exit
+descend
+defeat
+failure
+chaos
+poverty
+stranger
+captive
+servant
+imperfect
+useless
+fragile
+alone
+forgotten
+losing
+sorry
+weakness
+disorder
+bored
+silent
+unable
+selfish
+unkind
+lazy
+broken
+gone
+missing
+hiding
+sleeping
+crying
