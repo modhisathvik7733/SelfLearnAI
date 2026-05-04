@@ -341,6 +341,30 @@ def main() -> None:
         print(f"  {mark} {src:>8s} → {tgt:<8s}  "
               f"predicted: {pred:<10s}  cos(pred,truth)={c:+.3f}")
 
+    # ---- encoder-neighborhood probe ----
+    # For each held-out (src, tgt), what does the encoder ITSELF think tgt's
+    # nearest pool neighbors are? If the truth's top-3 neighbors include a
+    # training-target lure or a soft synonym, no operator can win retrieval —
+    # the encoder's geometry is the limit, not operator capacity.
+    print("\n" + "=" * 88)
+    print(f"ENCODER NEIGHBORHOOD — top-3 cos neighbors of TRUE target ({args.encoder})")
+    print("(operator not involved; pure encoder geometry)")
+    print("=" * 88)
+    with torch.no_grad():
+        truth_n = F.normalize(z_held_tgt, dim=-1)
+        pool_n_full = F.normalize(z_pool, dim=-1)
+        sims_truth = truth_n @ pool_n_full.T            # (held, pool)
+    for i, (src, tgt) in enumerate(held_pairs):
+        sims_i = sims_truth[i].clone()
+        if tgt in pool:
+            sims_i[pool.index(tgt)] = -1.0              # exclude self
+        topk = torch.topk(sims_i, k=3)
+        nbrs = ", ".join(
+            f"{pool[j]}({s:+.3f})"
+            for j, s in zip(topk.indices.tolist(), topk.values.tolist())
+        )
+        print(f"  {src:>8s} → {tgt:<8s}   nearest-to-{tgt}: {nbrs}")
+
     # ---- routing diagnostic ----
     if args.show_routing:
         # Best multi-head arch (shared or per-head).

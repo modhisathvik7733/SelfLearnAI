@@ -45,12 +45,29 @@ nearest-neighbor lookup over a candidate vocabulary.
 5. **Precompute & cache foundation features** to disk (fp16). Stage-1 step
    time went from ~3s (PIL bottlenecked) to ~50ms.
 
-## The one architectural floor we can still see
+## The "multi-axial floor" turned out to be encoder geometry, not operator capacity
 
-**Multi-axial concepts** — antonyms (big↔small, hot↔cold, true↔false, …) —
-score ~0% with a single-head operator. A single direction-vector cannot span
-disjoint semantic axes. This is the *one* failure case in the entire concept
-library, and the reason Option 3 below exists.
+Initially recorded as the project's only failure case (~0% on antonyms with
+single-head). Option-3 multi-head sweep + cos→truth diagnostic (commit
+`4e2f752`) re-diagnosed it:
+
+- **cos(pred, truth) ≈ 0.86 across every architecture** (single-head, K=2,
+  K=3, K=4, shared-residual, per-head-residual). All produce essentially the
+  same representation — multi-head adds no signal here.
+- Under FAIR pool (training targets dropped), **single-head reaches 0.722**
+  on GTE-base, 0.611 on E5. Not the ~0% originally feared.
+- The 2/6 persistent failures (`warm→cool`, `calm→angry`) lose retrieval to
+  *encoder neighbors* of the truth, not to the operator's wrong direction.
+  The operator points to the right antonym region; the encoder's
+  neighborhood puts a closer distractor in the way.
+
+So the "single direction can't span disjoint axes" hypothesis was wrong: a
+single direction + residual MLP DOES span all 6 axes (cos 0.86 to each).
+The real limit is encoder topology for soft/ambiguous antonyms (warm, calm).
+
+Open question for later: contrastive antonym fine-tune of the encoder. Not
+on the immediate path — the system already covers every concept type at
+high quality once retrieval design is fair.
 
 ## Current state of the repo
 
@@ -67,28 +84,12 @@ library, and the reason Option 3 below exists.
   (architectural sweep).
 - `checkpoints/stage1/` — trained adapters (GPU-side; not in repo).
 
-## Right now — Option 3: break the multi-axial limit
+## Option-3 result (multi-head sweep) — done
 
-Hypothesis: **K direction vectors + a router lets a single operator cover
-disjoint antonym axes**. Each head specializes (size, temperature, truth,
-emotion, …); the router sends each input to the right head.
-
-Two variants to test:
-- `MultiHeadConceptOperator` — K direction-vectors, K alphas, **shared**
-  residual MLP. Cheap; already implemented.
-- `MultiHeadConceptOperatorPerHead` — K direction-vectors, K alphas,
-  **per-head** residual MLPs. More capacity for axis-specific non-linearities.
-  *Add this next.*
-
-Sweep on `data/opposite/`:
-- K ∈ {1, 2, 3, 4} × {shared-residual, per-head-residual} × 3 seeds.
-- Held-out 6 antonym pairs across spatial / temperature / quality /
-  emotion / abstract / epistemic axes.
-
-If multi-head clears 0.5: routing solves multi-axiality, and the system
-covers every concept type tested. If it stays at ~0: the floor is in the
-encoder's antonym geometry, and the next move is encoder-side (E5 / a
-contrastive antonym-aware embedding).
+Run: `python scripts/multi_head_opposite.py --encoder {gte-base|e5-large-v2}
+[--fair-pool] [--show-routing]`. Results above. Multi-head adds no signal
+on antonyms once you control for pool design — diagnostic showed cos→truth
+is invariant to architecture.
 
 ## What comes after Option 3
 
