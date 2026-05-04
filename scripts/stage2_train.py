@@ -38,14 +38,34 @@ def _read_tsv_pairs(path: Path) -> list[tuple[str, str]]:
 
 
 def _read_image_pairs(path: Path) -> list[ImagePair]:
+    """Read (one_path, many_path, noun) triples, one per line.
+    Skips blank lines and # comments. Validates each path actually exists.
+    """
     out: list[ImagePair] = []
+    bad: list[tuple[int, str]] = []
     with open(path) as f:
-        for line in f:
-            parts = line.strip().split("\t")
-            if len(parts) < 3:
+        for lineno, raw in enumerate(f, start=1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
                 continue
-            one, many, noun = parts[:3]
-            out.append(ImagePair(Path(one), Path(many), noun))
+            parts = line.split("\t")
+            if len(parts) < 3:
+                bad.append((lineno, f"need 3 tab-separated fields, got {len(parts)}"))
+                continue
+            one_p, many_p, noun = Path(parts[0]), Path(parts[1]), parts[2]
+            if not one_p.exists():
+                bad.append((lineno, f"missing file: {one_p}"))
+                continue
+            if not many_p.exists():
+                bad.append((lineno, f"missing file: {many_p}"))
+                continue
+            out.append(ImagePair(one_p, many_p, noun))
+    if bad:
+        # Print warnings for bad entries; don't fail unless ALL entries bad.
+        for lineno, msg in bad[:5]:
+            print(f"  [warning] {path}:{lineno}  {msg}")
+        if len(bad) > 5:
+            print(f"  ... and {len(bad) - 5} more")
     return out
 
 
@@ -68,6 +88,17 @@ def main() -> None:
     image_pairs = _read_image_pairs(data_dir / "image_pairs.tsv")
 
     print(f"Loaded {len(text_pairs)} text pairs and {len(image_pairs)} image pairs.")
+
+    if not image_pairs:
+        sys.exit(
+            f"\nERROR: no valid image pairs in {data_dir / 'image_pairs.tsv'}.\n"
+            f"  Cross-modal consistency loss requires real image pairs.\n"
+            f"  Generate them first:\n"
+            f"    python3 scripts/build_image_pairs_coco.py \\\n"
+            f"        --coco-root /workspace/coco --split val2017 \\\n"
+            f"        --out {data_dir / 'image_pairs.tsv'} \\\n"
+            f"        --pairs-per-noun 10\n"
+        )
 
     trainer = Stage2Trainer(cfg, text_pairs, image_pairs)
     trainer.fit()

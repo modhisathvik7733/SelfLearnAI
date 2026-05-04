@@ -14,7 +14,7 @@ vjepa_name:  facebook/vjepa2-vitl-fpc16-256-ssv2
 # --- Training ---
 # Defaults sized for a 24-32 GB GPU (RTX 4090 / 5090 / A100).
 # For a smaller GPU (8-12 GB), drop batch_size to 64.
-steps:                  5000          # bumped from 1000 — cache mode makes this cheap
+steps:                 10000          # cache mode is fast (~2 min/5k steps on RTX 5090)
 batch_size:             256           # 4x bump; 5090 has 32GB, was using 4GB at bs=64
 lr:                     0.0002        # linear-scaled with batch (sqrt-rule, half-strength)
 weight_decay:           0.01
