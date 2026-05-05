@@ -1,0 +1,57 @@
+# Tier-1 canonical intent eval set.
+#
+# Format: question TAB concept TAB source TAB status
+# status ∈ {parseable, refuse}
+#   parseable: a Tier-1 pattern should match; concept & source must match.
+#   refuse: no pattern should match; parser should return None.
+#
+# These are the CANONICAL phrasings the typed grammar is expected to
+# handle at 100%. Paraphrase / informal phrasings are deliberately
+# parked for the Tier-2 (Ψ-space classifier) eval set in Task 1.2.
+
+# --- plural ---
+what's the plural of cat	plural	cat	parseable
+plural of dog	plural	dog	parseable
+make book plural	plural	book	parseable
+plurals for child	plural	child	parseable
+
+# --- past_tense ---
+past tense of run	past_tense	run	parseable
+what's the past tense of go	past_tense	go	parseable
+the past of speak	past_tense	speak	parseable
+write in past tense	past_tense	write	parseable
+
+# --- comparative ---
+comparative of big	comparative	big	parseable
+what's the comparative of fast	comparative	fast	parseable
+more tall	comparative	tall	parseable
+
+# --- superlative ---
+superlative of hot	superlative	hot	parseable
+what's the superlative of small	superlative	small	parseable
+most quick	superlative	quick	parseable
+
+# --- opposite ---
+opposite of warm	opposite	warm	parseable
+what's the opposite of bright	opposite	bright	parseable
+antonym of happy	opposite	happy	parseable
+
+# --- agentive ---
+agentive of write	agentive	write	parseable
+agent of teach	agentive	teach	parseable
+one who paints	agentive	paint	parseable
+someone who builds	agentive	build	parseable
+
+# --- young ---
+baby cat	young	cat	parseable
+young horse	young	horse	parseable
+what is a young dog called	young	dog	parseable
+what is a baby cow	young	cow	parseable
+
+# --- refuse (out of library) ---
+what's the capital of France	-	-	refuse
+how do you say hello in French	-	-	refuse
+tell me about quantum physics	-	-	refuse
+what is your name	-	-	refuse
+translate this sentence to spanish	-	-	refuse
+why is the sky blue	-	-	refuse

@@ -1,0 +1,26 @@
+{
+  "task": "1.1",
+  "eval_path": "data/intent_eval/canonical.tsv",
+  "n_rows": 31,
+  "n_patterns": 14,
+  "concepts": [
+    "agentive",
+    "comparative",
+    "opposite",
+    "past_tense",
+    "plural",
+    "superlative",
+    "young"
+  ],
+  "counters": {
+    "parseable_total": 25,
+    "parseable_correct": 25,
+    "parseable_wrong": 0,
+    "parseable_missed": 0,
+    "refuse_total": 6,
+    "refuse_correct": 6,
+    "refuse_violated": 0
+  },
+  "failures": [],
+  "pass": true
+}
