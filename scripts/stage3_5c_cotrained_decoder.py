@@ -52,7 +52,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch
 import torch.nn.functional as F
 
-from selflearnai.concepts import ConceptOperator
 from selflearnai.generator import (
     PointerSeqCondDecoder,
     perturb_h,
@@ -224,7 +223,7 @@ def main() -> None:
     h_masks     = train_data["h_masks"]
     target_ids  = train_data["target_ids"]
     target_h    = train_data["target_h"]
-    stream      = train_data["stream_label"]
+    stream      = train_data["stream_label"].to(args.device)
     N = h_inputs.size(0)
     print(f"  total examples: {N} ({train_data['n_per_stream']} per stream)")
     print(f"  stream A (identity singular): {(stream == 0).sum().item()}")
