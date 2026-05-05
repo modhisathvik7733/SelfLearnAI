@@ -213,13 +213,31 @@ def cluster_with_silhouette_sweep(
     n_init: int = 8,
     max_iter: int = 100,
     seed: int = 0,
+    normalize_inputs: bool = True,
 ) -> SweepResult:
     """Run KMeans for k in [k_min, k_max], pick the k with the highest
-    silhouette. Tiebreak by lower inertia."""
+    silhouette. Tiebreak by lower inertia.
+
+    `normalize_inputs=True` (default): L2-normalize each row of `x`
+    before clustering. ΔΨ residuals encode concept identity as a
+    *direction* in encoder space — magnitude carries word-frequency
+    and encoder-norm noise that's irrelevant to which concept is
+    being expressed. On unit vectors, Euclidean distance is a monotone
+    of cosine distance, so KMeans + silhouette + operator-consistency
+    all score the same geometric structure.
+
+    Setting `normalize_inputs=False` is for callers that need to
+    distinguish concepts that share a direction but differ in
+    magnitude (e.g. comparative vs superlative may end up on the
+    same axis at different distances). For Stage 1.5 discovery
+    smoke + sleep cycles, the default is correct.
+    """
     n = x.shape[0]
     k_max_eff = min(k_max, n - 1)
     if k_max_eff < k_min:
         raise ValueError(f"too few points (n={n}) for k_min={k_min}")
+    if normalize_inputs:
+        x = F.normalize(x, dim=-1)
     per_k: dict[int, dict[str, float]] = {}
     best_k = k_min
     best_sil = -2.0

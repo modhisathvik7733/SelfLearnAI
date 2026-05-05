@@ -44,8 +44,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import torch
-
 from selflearnai.discovery import (
     cluster_with_silhouette_sweep,
     compute_psi_shifts,
@@ -133,14 +131,21 @@ def main() -> None:
           f"shifts: {tuple(shifts.shape)}")
 
     # ---- Cluster ----
-    print(f"\nKMeans sweep (k ∈ [{args.k_min}, {args.k_max}], "
-          f"n_init={args.n_init}) ...")
+    # cluster_with_silhouette_sweep L2-normalizes inputs by default —
+    # ΔΨ residuals encode concept identity as a direction in encoder
+    # space (substrate axiom). On unit vectors, Euclidean distance is
+    # a monotone of cosine distance, so KMeans + silhouette + the
+    # operator-consistency check (which already uses cosine) all
+    # score the same geometric structure.
+    print(f"\nKMeans sweep on L2-normalized shifts "
+          f"(k ∈ [{args.k_min}, {args.k_max}], n_init={args.n_init}) ...")
     sweep = cluster_with_silhouette_sweep(
         shifts.cpu(),
         k_min=args.k_min,
         k_max=args.k_max,
         n_init=args.n_init,
         seed=args.seed,
+        normalize_inputs=True,
     )
     print(f"  per-K silhouette / inertia:")
     for k, m in sweep.per_k.items():
