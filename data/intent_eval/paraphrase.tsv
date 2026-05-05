@@ -1,0 +1,63 @@
+# Tier-1 paraphrase intent eval set.
+#
+# Format identical to canonical.tsv: question TAB concept TAB source TAB status.
+# All rows have status=parseable — but the surface form is deliberately
+# *different* from the regex patterns Tier 1 knows. The expectation is
+# that Tier 1 MISSES most of these (returning None); Tier 2 (the
+# Ψ-space classifier in Task 1.4) will pick up the long tail.
+#
+# This file is the baseline measurement for "how much does Tier 2 need
+# to lift?" — exact Tier-1 coverage on this set will be reported by
+# scripts/stage1_intent_coverage_report.py and used to set the Tier-2
+# acceptance bar in Task 1.4.
+#
+# 5 paraphrases × 7 concepts = 35 rows.
+
+# --- plural (5) ---
+how do you say cat in plural	plural	cat	parseable
+what's the plural form for dog	plural	dog	parseable
+i need the plural for book	plural	book	parseable
+what do you call multiple cats	plural	cat	parseable
+give me the plural form for tree	plural	tree	parseable
+
+# --- past_tense (5) ---
+how do you say run in past tense	past_tense	run	parseable
+what's the past form for go	past_tense	go	parseable
+what was the verb run yesterday	past_tense	run	parseable
+how did we say walk before	past_tense	walk	parseable
+the previous form of run	past_tense	run	parseable
+
+# --- comparative (5) ---
+the comparative form for big	comparative	big	parseable
+comparative on small	comparative	small	parseable
+the X-er form of fast	comparative	fast	parseable
+how to say big with -er ending	comparative	big	parseable
+the more form of tall	comparative	tall	parseable
+
+# --- superlative (5) ---
+the superlative form for hot	superlative	hot	parseable
+the most version of big	superlative	big	parseable
+highest form of fast	superlative	fast	parseable
+the X-est form of small	superlative	small	parseable
+extreme of warm	superlative	warm	parseable
+
+# --- opposite (5) ---
+the reverse of warm	opposite	warm	parseable
+the inverse of bright	opposite	bright	parseable
+the contrary of happy	opposite	happy	parseable
+what's the negation of true	opposite	true	parseable
+what means the opposite to warm	opposite	warm	parseable
+
+# --- agentive (5) ---
+noun for someone who teaches	agentive	teach	parseable
+what do we call a person that builds	agentive	build	parseable
+doer of paint	agentive	paint	parseable
+the X-er noun for help	agentive	help	parseable
+the name for someone who teaches	agentive	teach	parseable
+
+# --- young (5) ---
+what do you call a baby cat	young	cat	parseable
+name for a baby horse	young	horse	parseable
+the kid form of dog	young	dog	parseable
+young version of cow	young	cow	parseable
+what is the name of a baby goat	young	goat	parseable
