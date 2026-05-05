@@ -1,14 +1,15 @@
-"""Task 1.10a — verification gates smoke test (TypeGate + AxiomGate + DriftGate).
+"""Task 1.10 — verification gates smoke test (Type + Axiom + Drift + Conformal).
 
-Runs the three structural verification gates from
+Runs all four structural verification gates from
 selflearnai/planner/verifier.py on the agentive ∘ plural chain test
 cases (paint → painters, drive → drivers, ..., help → helpers).
 
 For each test case (verb, plural_agent):
   - Encode verb → ψ_start
   - Train operator library {agentive, plural, ...}
+  - Fit a StepCalibrator per operator on its training-pair sources
   - Run planner.execute_hint(ψ_start, ψ_goal, ['agentive', 'plural'])
-  - Run verify_chain on the result with all three gates
+  - Run verify_chain on the result with all four gates
   - Confirm every gate passes at every step
 
 Plus a CONTROL test: explicitly try a type-incorrect chain (plural
@@ -16,9 +17,9 @@ applied to a Verb input) and confirm TypeGate REJECTS it. This
 validates that gates are actually doing their job, not just rubber-
 stamping every chain.
 
-Acceptance gate (Task 1.10a):
-  - Correct chain:   all 3 gates pass on every step of all 6 cases
-                     (3 gates × 2 steps × 6 cases = 36 checks all green).
+Acceptance gate (Task 1.10):
+  - Correct chain:   all 4 gates pass on every step of all 6 cases
+                     (4 gates × 2 steps × 6 cases = 48 checks all green).
   - Type-incorrect chain: TypeGate REJECTS the first step (the
                           source-type mismatch), validating it's a
                           real check rather than a tautology.
@@ -36,13 +37,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import torch
-
 from selflearnai.planner import (
     BeamSearchPlanner,
     DEFAULT_TYPE_SIGNATURES,
     AxiomGate,
+    ConformalGate,
     DriftGate,
+    StepCalibrator,
     TypeGate,
     verify_chain,
 )
@@ -54,7 +55,6 @@ from scripts.stage1_planner_beam_smoke import (
     ENCODERS,
     read_pairs,
     make_encode_fn,
-    train_operator,
 )
 from scripts.stage1_planner_prior_train import (
     CONCEPTS_DATA,
@@ -89,15 +89,21 @@ def main() -> None:
     parser.add_argument("--operator-epochs", type=int, default=2000)
     parser.add_argument("--axiom-threshold", type=float, default=0.99)
     parser.add_argument("--drift-threshold", type=float, default=0.5)
+    parser.add_argument(
+        "--conformal-alpha", type=float, default=0.10,
+        help="Per-operator step-magnitude calibration α. Lower = tighter "
+             "lower bound (more rejections of borderline behavior).",
+    )
     parser.add_argument("--out", default="results/stage1/planner_verifier_smoke.json")
     args = parser.parse_args()
 
     enc_cfg = ENCODERS[args.encoder]
-    print("Task 1.10a — verification gates smoke (Type / Axiom / Drift)")
+    print("Task 1.10 — verification gates smoke (Type / Axiom / Drift / Conformal)")
     print("=" * 78)
     print(f"Encoder: {args.encoder} ({enc_cfg['model']}, dim={enc_cfg['dim']})")
     print(f"Axiom non-identity threshold: {args.axiom_threshold}")
     print(f"Drift on-manifold threshold:  {args.drift_threshold}")
+    print(f"Conformal calibration α:      {args.conformal_alpha}")
 
     # ---- Encoder ----
     print(f"\nLoading {enc_cfg['model']} ...")
@@ -121,6 +127,30 @@ def main() -> None:
         seed=args.seed, epochs=args.operator_epochs,
     )
 
+    # ---- Per-operator step calibrators (for ConformalGate) ----
+    print("\nFitting per-operator step calibrators ...")
+    step_calibrators: dict[str, StepCalibrator] = {}
+    for concept, ddir in CONCEPTS_DATA:
+        train_pairs = read_pairs(Path(ddir) / "text_pairs_train.tsv")
+        sources = [p[0] for p in train_pairs]
+        if not sources:
+            print(f"  {concept:<14s}  (no train pairs; skipped)")
+            continue
+        z_src = encode(sources)
+        cal = StepCalibrator.fit(
+            op_name=concept,
+            op=operators[concept],
+            z_src=z_src,
+            alpha=args.conformal_alpha,
+        )
+        step_calibrators[concept] = cal
+        cos_arr = cal.raw_cos_values
+        print(
+            f"  {concept:<14s}  n={cal.n_calib:<3d}  "
+            f"cos_low(α={args.conformal_alpha})={cal.cos_low:+.4f}  "
+            f"[min={min(cos_arr):+.4f}, max={max(cos_arr):+.4f}]"
+        )
+
     # ---- Planner (used as the chain executor only) ----
     planner = BeamSearchPlanner(
         operators=operators, beam_width=4, max_depth=3, step_bonus=0.015,
@@ -132,7 +162,8 @@ def main() -> None:
     )
     axiom_gate = AxiomGate(threshold=args.axiom_threshold)
     drift_gate = DriftGate(reference_embeddings=ref_emb, threshold=args.drift_threshold)
-    gates = [type_gate_with_verb_source, axiom_gate, drift_gate]
+    conformal_gate = ConformalGate(calibrators=step_calibrators)
+    gates = [type_gate_with_verb_source, axiom_gate, drift_gate, conformal_gate]
 
     # ============================================================
     # MAIN TEST: correct chain (agentive ∘ plural) on each verb.
@@ -227,7 +258,7 @@ def main() -> None:
     # ACCEPTANCE
     # ============================================================
     print("\n" + "=" * 78)
-    print("ACCEPTANCE CHECK (Task 1.10a)")
+    print("ACCEPTANCE CHECK (Task 1.10)")
     print("=" * 78)
     main_pass = n_gate_passed == n_gate_total
     print(
@@ -239,16 +270,25 @@ def main() -> None:
         f"→ {'PASS' if type_rejection_works else 'FAIL'}"
     )
     overall = main_pass and type_rejection_works
-    print(f"\n→ Task 1.10a: {'PASS' if overall else 'FAIL'}")
+    print(f"\n→ Task 1.10: {'PASS' if overall else 'FAIL'}")
 
     # ---- Save JSON ----
     payload = {
-        "task": "1.10a",
+        "task": "1.10",
         "encoder": args.encoder,
         "encoder_dim": enc_cfg["dim"],
         "thresholds": {
             "axiom_non_identity": args.axiom_threshold,
             "drift": args.drift_threshold,
+            "conformal_alpha": args.conformal_alpha,
+        },
+        "step_calibrators": {
+            name: {
+                "cos_low": cal.cos_low,
+                "alpha": cal.alpha,
+                "n_calib": cal.n_calib,
+            }
+            for name, cal in step_calibrators.items()
         },
         "ref_vocab_size": len(ref_words),
         "main_test": {

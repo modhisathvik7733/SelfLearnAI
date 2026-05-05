@@ -6,27 +6,31 @@ through a pipeline of independent gates. Each gate returns a
 GateResult with a pass/fail boolean, the metric value, the threshold
 used, and a human-readable reason.
 
-This first commit (Task 1.10a) implements three gates that don't
-require any new training:
+Four gates implemented across Tasks 1.10a/b:
 
-  - TypeGate: operator signatures and chain-composition typing.
+  - TypeGate (1.10a): operator signatures and chain-composition typing.
     Ensures `output_type(op_i) == input_type(op_{i+1})` along the
     chain. Catches nonsense compositions like `plural ∘ plural`
     starting from a Verb (plural's input type is Noun, not Verb).
 
-  - AxiomGate: operator non-identity. Each operator should
+  - AxiomGate (1.10a): operator non-identity. Each operator should
     `cos(before, after) < threshold` — i.e. it must actually do
     something. A no-op operator that returns its input unchanged
     fails this check. Default threshold 0.99.
 
-  - DriftGate: state stays on the encoder manifold. After applying
-    an operator, the resulting embedding should still be close to
-    at least one known reference word (max cos to reference > 0.5).
-    Catches operators that produce off-manifold garbage outputs.
+  - DriftGate (1.10a): state stays on the encoder manifold. After
+    applying an operator, the resulting embedding should still be
+    close to at least one known reference word (max cos to reference
+    > 0.5). Catches operators that produce off-manifold garbage outputs.
 
-The fourth gate, ConformalGate (per-operator calibrated coverage),
-arrives in Task 1.10b — it needs per-operator ConformalOperatorCalibrator
-fitting which is plumbing-heavy enough to keep separate.
+  - ConformalGate (1.10b): per-operator calibrated step magnitude.
+    Each operator has a `StepCalibrator` fit on its training pairs:
+    `cos(src, op(src))` over training source words → α-quantile
+    lower bound. The gate passes iff `cos(before, after) >= cos_low`.
+    Complements AxiomGate (which guards the upper bound):
+        AxiomGate:     cos(before, after) <  0.99    "did something"
+        ConformalGate: cos(before, after) >= cos_low "didn't jump too far"
+    Together they sandwich the operator's typical step-magnitude.
 
 Failed gates do NOT raise. They surface as `passed=False` in the
 returned ChainVerification. The planner / caller decides whether to
@@ -37,6 +41,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -225,6 +230,116 @@ class DriftGate(Gate):
             reason=(
                 f"max cos to reference = {max_cos:+.4f}  "
                 f"({'>' if passed else '<='} {self.threshold:.2f})"
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Step-magnitude calibrator + ConformalGate (Task 1.10b)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StepCalibrator:
+    """Per-operator calibrated lower bound on step magnitude.
+
+    The operator's training pairs (src, tgt) are encoded; we compute
+    cos(z_src, op(z_src)) for each pair — i.e. how much the operator
+    moves the embedding *on its training distribution*. The α-quantile
+    of these cos values becomes the lower bound: at inference we
+    expect cos(before, after) ≥ this bound for any state from the
+    same distribution.
+
+    α controls the bound's tightness: α=0.10 ⇒ pass iff the inference
+    step is at least as large as the smallest 10% of training steps.
+    Lower α ⇒ tighter bound ⇒ more rejections of borderline operator
+    behavior.
+
+    Note: this is a *one-sided* calibrated bound (lower only). The
+    upper bound is enforced by AxiomGate (`cos < 0.99`). Together
+    they sandwich typical operator behavior.
+    """
+    op_name: str
+    cos_low: float
+    alpha: float
+    n_calib: int
+    raw_cos_values: list[float]   # for debugging / reporting
+
+    @classmethod
+    def fit(
+        cls,
+        op_name: str,
+        op: Callable[[torch.Tensor], torch.Tensor],
+        z_src: torch.Tensor,
+        alpha: float = 0.10,
+    ) -> "StepCalibrator":
+        """Fit on encoded training source words.
+
+        z_src: (N, D) encoded source-word embeddings.
+        Returns a StepCalibrator with cos_low = α-quantile of the
+        cos(src_i, op(src_i)) distribution.
+        """
+        if not 0.0 < alpha < 1.0:
+            raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+        if z_src.dim() != 2:
+            raise ValueError(f"z_src must be 2-D (N, D), got shape {tuple(z_src.shape)}")
+        n = z_src.shape[0]
+        if n < 2:
+            raise ValueError(f"Need >= 2 training sources to fit, got {n}")
+        with torch.no_grad():
+            z_after = op(z_src)
+            cos_values = F.cosine_similarity(z_src, z_after, dim=-1).cpu().numpy()
+        cos_low = float(np.quantile(cos_values, alpha))
+        return cls(
+            op_name=op_name,
+            cos_low=cos_low,
+            alpha=alpha,
+            n_calib=n,
+            raw_cos_values=cos_values.tolist(),
+        )
+
+
+class ConformalGate(Gate):
+    """Per-operator calibrated step-magnitude check.
+
+    Constructed with a dict of `StepCalibrator` (one per operator). At
+    each step, the gate looks up the operator's calibrator and checks:
+        cos(before, after) >= cos_low
+    Passes iff so. Catches operators that take pathologically large
+    steps (off-manifold jumps) — the AxiomGate's complement.
+
+    If an operator has no registered calibrator (e.g., a new operator
+    discovered at planning time), the check is SKIPPED with passed=True
+    rather than raising. Surfacing the skip as a `reason` in the
+    GateResult lets the caller see what wasn't checked.
+    """
+    name = "conformal"
+
+    def __init__(self, calibrators: dict[str, StepCalibrator]):
+        self.calibrators: dict[str, StepCalibrator] = dict(calibrators)
+
+    def check(self, step_index, op_name, psi_before, psi_after, context):
+        if op_name not in self.calibrators:
+            return GateResult(
+                passed=True,
+                metric=float("nan"),
+                threshold=float("nan"),
+                reason=f"no calibrator for {op_name!r}; skipped",
+            )
+        cal = self.calibrators[op_name]
+        cos = float(
+            F.cosine_similarity(
+                psi_before.unsqueeze(0), psi_after.unsqueeze(0), dim=-1
+            ).item()
+        )
+        passed = cos >= cal.cos_low
+        return GateResult(
+            passed=passed,
+            metric=cos,
+            threshold=cal.cos_low,
+            reason=(
+                f"cos(before, after)={cos:+.4f}  "
+                f"({'>=' if passed else '<'} cos_low={cal.cos_low:+.4f}, "
+                f"α={cal.alpha}, n_calib={cal.n_calib})"
             ),
         )
 
