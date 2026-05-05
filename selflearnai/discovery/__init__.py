@@ -33,6 +33,17 @@ from .wake import (
     CHANNELS,
     route_program,
 )
+from .cluster import (
+    ConsistencyResult,
+    KMeansResult,
+    SweepResult,
+    cluster_with_silhouette_sweep,
+    compute_psi_shifts,
+    kmeans_cluster,
+    operator_consistency,
+    silhouette_score,
+    train_quick_operator,
+)
 
 __all__ = [
     "WakeBuffer",
@@ -40,4 +51,13 @@ __all__ = [
     "Channel",
     "CHANNELS",
     "route_program",
+    "ConsistencyResult",
+    "KMeansResult",
+    "SweepResult",
+    "cluster_with_silhouette_sweep",
+    "compute_psi_shifts",
+    "kmeans_cluster",
+    "operator_consistency",
+    "silhouette_score",
+    "train_quick_operator",
 ]
