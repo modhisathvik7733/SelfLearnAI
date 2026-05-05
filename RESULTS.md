@@ -1040,3 +1040,72 @@ python scripts/stage2a_2_package_smoke.py     # verify selflearnai/generator/
 python scripts/stage2a_3_train.py             # ~6-8 hr GPU, full training run
 python scripts/stage2a_regression.py          # closing-regression check
 ```
+
+---
+
+## Stage 3 — Universal Domain Ingestion (DONE)
+
+Stage 3 closed cleanly on `e5-large-v2`. Closing-regression runner `scripts/stage3_regression.py` green. Universal-pipeline thesis empirically validated; cross-domain operator composition validated *with the research-backed factored output refinement*.
+
+| Sub-task | Result |
+|---|---|
+| 3.1 cross-domain validation (definitional) | PASS — median cos 1.0, grammar 100%, word-fidelity 90% (108/120) |
+| 3.2 per-domain energy model               | PASS — both Gaussian + MLP at ROC-AUC 1.0000 vs Phase 2a's 432 OOD probes |
+| 3.3 versioned domain registry              | PASS — 5/5 sub-cases (register, LRU prune, version-bump, rollback, persistence) |
+| 3.4 universal ingestion orchestrator      | PASS — 5/5 plumbing checks; bonus quality on temporal (median cos 1.0, grammar 30/30) |
+| **3.5 cross-domain operator transfer**    | **PASS via factored output (3.5f)** — 6/8 (75%) on truly-novel after 4× 0/8 with naive δ-broadcast |
+| 3.6 per-domain conformal calibration       | PASS — ECE 0.0694 < 0.07 |
+
+### What Stage 3 buys for everything that follows
+
+- **Universal `ingest_domain(...)`**: takes a domain spec → trains decoder → fits energy model → calibrates conformal → registers. Demonstrated on definitional + temporal (two new domains beyond Phase 2a's morphological four), same recipe, both hit Phase 2a-class numbers.
+- **Domain-level out-of-domain refusal**: per-domain `E_domain(ψ)` cleanly separates on-manifold from off-manifold (ROC-AUC 1.000 on definitional vs Phase 2a-OOD).
+- **Cross-domain composition lesson**: the naive δ-broadcast-through-vocab-head approach for `definitional ∘ plural` fails empirically (4 attempts, all 0/8 on truly-novel subjects, even with ground-truth δ). The research-backed *factored output* fix works: stem decoder + tiny δ-classifier + per-domain rule-based morphology hits 6/8.
+- **Per-domain conformal calibration**: each registered domain has a calibrated coverage set (ECE < 0.07) replacing hand-tuned thresholds.
+
+### The 3.5 empirical journey (where the real work happened)
+
+Six sub-task attempts; the first four hit the same architectural wall, the fifth confirmed it isn't data-starved, the sixth shipped the research-backed fix.
+
+| Attempt | Approach | Result |
+|---|---|---|
+| 3.5  | Word-pair operator + δ-broadcast | 0/8 (operator δ wrong direction in sentence-ψ) |
+| 3.5b | Sentence-pair operator + δ-broadcast | 0/8 (ψ-lift fixed +0.0137 — operator now correct, decoder fails) |
+| 3.5c | + decoder co-trained on (h_perturbed → plur_target) | 0/8 (stream C nll → 0; decoder MEMORIZES specific transforms) |
+| 3.5d | Diagnostic: oracle δ on novel subjects | 0/8 (decoder genuinely did NOT generalize even with perfect δ) |
+| 3.5e | Scale to 150 subjects (5×) | 0/8 (data-starved hypothesis FALSIFIED) |
+| **3.5f** | **Factored output (research-backed)** | **6/8 PASS** — stem + tag classifier + per-domain rule |
+
+**Architectural lesson**: Pointer-Generator decoders trained on identity reconstruction memorize specific input→output token mappings; they do NOT learn morphological rules from δ-broadcast at v1's data scales. The standard fix (Patel & Bhattamishra ACL 2022, SIGMORPHON 2022): factor WHAT (stem, learned by pointer-copy that handles novel subjects fine) from HOW (transformation, learned by tiny δ-classifier + deterministic per-domain morphology rule). Per-domain rule-based morphology is exactly the "structural backbone" plan §13.9 anticipated for syntactically-strict transformations — applied surgically per-transformation rather than per-language.
+
+### Documented limitations (deferred to v2/CSIL)
+
+- **Multi-subword copy** (`bookcase` → `[book, ##case]`, only first piece copied) — surfaced in 3.5f's bookcase failure, same root cause as Phase 2a §19.14's comparative limitation. Span-copy mechanism is the v2 fix.
+- **Decoder hallucination on edge inputs** — 3.5f's "cabbage is cabbage vegetable" output is a pre-existing 3.1 decoder issue, independent of the factored architecture.
+- **Cross-conformal (CV+) for distribution-shift mitigation** — 3.6 ECE 0.0694 sits 1% under the 0.07 gate but the score distribution is very peaked. Same issue as the deferred 0.5.2.5 task.
+
+### What Stage 3 unlocks
+
+The system can now absorb new domains from docs + examples. Each domain is one `ingest_domain(...)` call → registered (decoder, energy, conformal). Cross-domain composition works via factored output. The remaining v1 deliverable is **Stage 4 (PsiNet-Refactor-v1 benchmark)** — ingest Python via the same Stage 3 pipeline (no tree-sitter), train per-task operators, run benchmark §10.
+
+Reproduce:
+
+```bash
+# Closing regression (quick mode, ~20-30 min):
+python scripts/stage3_regression.py
+
+# Full retraining regression (~6-7 hr — for major milestones):
+python scripts/stage3_regression.py --full
+
+# Individual sub-tasks (in execution order):
+python scripts/stage3_1_definitional.py        # 3.1 — ~4 hr
+python scripts/stage3_2_energy_model.py        # 3.2 — ~1 hr
+python scripts/stage3_3_registry_smoke.py      # 3.3 — ~5 sec
+python scripts/stage3_4_orchestrator_smoke.py  # 3.4 — ~30-45 min
+python scripts/stage3_5f_factored_output.py    # 3.5f — ~5 min
+python scripts/stage3_6_conformal.py           # 3.6 — ~5-10 min
+```
+
+Architectural memory: `feedback_factored_output_for_cross_domain.md` — chain operator → tag classifier → rule-based morphology, NOT δ-broadcast.
+
+Full empirical record: `results/stage3/closing_report.md`.
