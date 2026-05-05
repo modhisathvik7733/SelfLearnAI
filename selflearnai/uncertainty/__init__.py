@@ -13,5 +13,11 @@ neuro-symbolic chains: arXiv:2405.15912 (planned for `compositional.py`,
 Task 0.5.3).
 """
 from .conformal import ConformalOperatorCalibrator, coverage_curve
+from .compositional import BonferroniChainCalibrator, compose_operators
 
-__all__ = ["ConformalOperatorCalibrator", "coverage_curve"]
+__all__ = [
+    "ConformalOperatorCalibrator",
+    "coverage_curve",
+    "BonferroniChainCalibrator",
+    "compose_operators",
+]
