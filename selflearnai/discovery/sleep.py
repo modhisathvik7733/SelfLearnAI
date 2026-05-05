@@ -171,11 +171,7 @@ def _collect_unexplained_pairs(
     return pairs, channels
 
 
-def _make_concept_id(
-    cluster_id: int,
-    cycle_tag: str,
-    registry: ConceptRegistry,
-) -> str:
+def _make_concept_id(cluster_id: int, cycle_tag: str) -> str:
     """Stable, unique-per-cycle id. cycle_tag should be unique to a
     sleep invocation (timestamp or counter); the cluster_id distinguishes
     multiple concepts proposed by the same cycle."""
@@ -186,12 +182,18 @@ def _make_concept_id(
 # Public: one sleep cycle
 # ---------------------------------------------------------------------------
 
-@torch.no_grad()
 def _evaluate_consistency_gate(
     z_src: torch.Tensor, z_tgt: torch.Tensor, config: SleepConfig,
     *, dim: int, device: str,
 ) -> tuple[bool, float, float]:
-    """Train operator on full cluster, return (passes, mean_cos, var_cos)."""
+    """Train operator on full cluster, return (passes, mean_cos, var_cos).
+
+    NOTE: cannot be wrapped in @torch.no_grad — train_quick_operator
+    needs autograd to fit the operator. operator_consistency has its
+    own @torch.no_grad internally, and train_quick_operator sets
+    requires_grad_(False) on the trained op before returning, so no
+    grad state leaks back to the caller.
+    """
     op = train_quick_operator(
         z_src, z_tgt,
         dim=dim, device=device,
@@ -324,7 +326,7 @@ def run_sleep_cycle(
                 seed=config.operator_seed, epochs=config.operator_epochs,
             )
 
-            concept_id = _make_concept_id(cid, cycle_tag, registry)
+            concept_id = _make_concept_id(cid, cycle_tag)
             row.validation_attempted = True
 
             val = validate_candidate(
