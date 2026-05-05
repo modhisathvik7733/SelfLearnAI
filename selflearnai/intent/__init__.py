@@ -31,9 +31,19 @@ from .grammar import (
     TypedGrammarParser,
     DEFAULT_PATTERNS,
 )
+from .classifier import (
+    IntentClassifier,
+    IntentClassMapping,
+    IntentPrediction,
+)
 
 __all__ = [
+    # Tier 1
     "Intent",
     "TypedGrammarParser",
     "DEFAULT_PATTERNS",
+    # Tier 2
+    "IntentClassifier",
+    "IntentClassMapping",
+    "IntentPrediction",
 ]
