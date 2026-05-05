@@ -20,5 +20,16 @@ Stage 1 build-out (per plan §19.7):
     wake/sleep are flattened here for shorter effective depths.
 """
 from .beam import BeamSearchPlanner, PlanState
+from .prior import (
+    OperatorPriorMLP,
+    OperatorPriorPrediction,
+    make_prior_callable,
+)
 
-__all__ = ["BeamSearchPlanner", "PlanState"]
+__all__ = [
+    "BeamSearchPlanner",
+    "PlanState",
+    "OperatorPriorMLP",
+    "OperatorPriorPrediction",
+    "make_prior_callable",
+]

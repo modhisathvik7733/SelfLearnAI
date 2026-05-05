@@ -96,6 +96,8 @@ class BeamSearchPlanner:
         beam_width: int = 4,
         max_depth: int = 5,
         step_bonus: float = 0.0,
+        prior: Callable[[torch.Tensor], dict[str, float]] | None = None,
+        top_k_operators: int | None = None,
     ):
         """
         Args:
@@ -110,6 +112,14 @@ class BeamSearchPlanner:
                 cos scores — the standard "informative-when-cos-margin
                 -is-tiny" tie-breaker, validated on the agentive ∘
                 plural test in Task 1.7.
+            prior: optional callable ψ → {op_name: probability}. When
+                given together with `top_k_operators`, the planner
+                expands only the top-N operators at each state by
+                prior probability, instead of all of them. Used to
+                prune the search fanout from K^D to N^D (Task 1.8).
+            top_k_operators: number of top-prior operators to expand
+                at each state. If None or >= len(operators), no pruning
+                (full expansion). Ignored when `prior` is None.
         """
         if not operators:
             raise ValueError("Need at least one operator in the library.")
@@ -119,10 +129,19 @@ class BeamSearchPlanner:
             raise ValueError(f"max_depth must be >= 0, got {max_depth}")
         if step_bonus < 0:
             raise ValueError(f"step_bonus must be >= 0, got {step_bonus}")
+        if top_k_operators is not None and top_k_operators < 1:
+            raise ValueError(
+                f"top_k_operators must be >= 1 if set, got {top_k_operators}"
+            )
         self.operators: dict[str, Operator] = dict(operators)
         self.beam_width: int = beam_width
         self.max_depth: int = max_depth
         self.step_bonus: float = step_bonus
+        self.prior: Callable[[torch.Tensor], dict[str, float]] | None = prior
+        # Cap top_k at len(operators) so we never silently lose operators.
+        if top_k_operators is not None and top_k_operators >= len(operators):
+            top_k_operators = None
+        self.top_k_operators: int | None = top_k_operators
 
     def _score(self, psi: torch.Tensor, psi_goal: torch.Tensor, depth: int) -> tuple[float, float]:
         """Compute (combined_score, cos_to_goal) for a state.
@@ -138,6 +157,25 @@ class BeamSearchPlanner:
         )
         score = cos + self.step_bonus * depth
         return score, cos
+
+    def _operators_to_expand(self, psi: torch.Tensor) -> list[str]:
+        """Return the list of operator names to expand at state `psi`.
+
+        With no prior (or no top-k cap), returns all operators in
+        registration order. With prior + top_k, returns the top-N
+        operators by prior probability descending.
+        """
+        if self.prior is None or self.top_k_operators is None:
+            return list(self.operators.keys())
+        scores = self.prior(psi)
+        # Operators not in the prior's vocabulary get probability 0
+        # (treated as bottom-ranked rather than crashing).
+        ranked = sorted(
+            self.operators.keys(),
+            key=lambda name: scores.get(name, 0.0),
+            reverse=True,
+        )
+        return ranked[: self.top_k_operators]
 
     @torch.no_grad()
     def search(
@@ -178,7 +216,8 @@ class BeamSearchPlanner:
         for d in range(1, self.max_depth + 1):
             candidates: list[PlanState] = []
             for state in beam:
-                for op_name, op in self.operators.items():
+                for op_name in self._operators_to_expand(state.psi):
+                    op = self.operators[op_name]
                     next_psi = op(state.psi.unsqueeze(0)).squeeze(0)
                     score, cos = self._score(next_psi, psi_goal, depth=d)
                     new_state = PlanState(
@@ -231,7 +270,8 @@ class BeamSearchPlanner:
         for d in range(1, self.max_depth + 1):
             candidates: list[PlanState] = []
             for state in beam:
-                for op_name, op in self.operators.items():
+                for op_name in self._operators_to_expand(state.psi):
+                    op = self.operators[op_name]
                     next_psi = op(state.psi.unsqueeze(0)).squeeze(0)
                     score, cos = self._score(next_psi, psi_goal, depth=d)
                     new_state = PlanState(
