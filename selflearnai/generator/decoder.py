@@ -44,7 +44,22 @@ class PointerSeqCondDecoder(nn.Module):
         ffn_mult: int = 4,
         feat_dropout: float = 0.2,
         attn_dropout: float = 0.1,
+        use_position_bias: bool = False,
+        position_bias_init: float = 0.5,
     ) -> None:
+        """Locked architecture from §19.14. The `use_position_bias` flag
+        is the 2a.4 multi-subword-fix extension (defaults to False to
+        preserve 2a.3 behavior).
+
+        When True, adds a learnable T_out × T_in matrix added to the
+        pointer's attention scores. Initialized with `position_bias_init`
+        on the diagonal — a soft identity prior that says "output
+        position N likely copies from encoder position N." For
+        autoencoder-shaped tasks (target sentence == encoder input,
+        which is Phase 2a's setup) this is the right inductive bias
+        and helps multi-subword targets where per-position attention
+        otherwise gets confused (see plan §19.14 documented limitation).
+        """
         super().__init__()
         self.encoder_dim = encoder_dim
         self.hidden_dim = hidden_dim
@@ -83,6 +98,14 @@ class PointerSeqCondDecoder(nn.Module):
         self.ptr_q = nn.Linear(hidden_dim, hidden_dim)
         self.ptr_k = nn.Linear(hidden_dim, hidden_dim)
 
+        # Optional position-alignment bias for multi-subword fix (2a.4).
+        # Soft identity bias on the pointer attention scores.
+        if use_position_bias:
+            bias = torch.eye(t_max) * position_bias_init
+            self.position_bias = nn.Parameter(bias)
+        else:
+            self.register_parameter("position_bias", None)
+
         # Per-position p_gen ∈ [0, 1] via sigmoid.
         self.gen_gate = nn.Linear(hidden_dim, 1)
 
@@ -119,6 +142,17 @@ class PointerSeqCondDecoder(nn.Module):
         q = self.ptr_q(out_hidden)                               # [B, T_out, h]
         k = self.ptr_k(memory)                                   # [B, T_in,  h]
         ptr_scores = torch.bmm(q, k.transpose(1, 2)) / math.sqrt(self.hidden_dim)
+
+        # Add the learnable position-alignment bias if enabled (2a.4).
+        # Slice to actual T_out × T_in shape — bias was initialized at
+        # t_max × t_max so this just trims to the current sequence.
+        if self.position_bias is not None:
+            T_out_actual = ptr_scores.size(1)
+            T_in_actual = ptr_scores.size(2)
+            ptr_scores = ptr_scores + self.position_bias[
+                :T_out_actual, :T_in_actual,
+            ].unsqueeze(0)
+
         ptr_scores = ptr_scores.masked_fill(
             memory_pad_mask.unsqueeze(1), float("-inf"),
         )
