@@ -11,28 +11,31 @@ criteria. Cosine-to-truth alone admits two known failure modes:
 
 The three criteria together rule both out:
 
-  1. GENERALIZATION (cos→truth ≥ τ_cos) — operator's mean output
-     cosine to held-out targets meets threshold. Tests that the
-     learned shift transfers off the training cluster, not just
-     within it (operator-consistency from Task 1.5.2 was on training
-     members; this is on held-out).
+  1. GENERALIZATION (RELATIVE) — operator beats the no-op baseline:
+       mean(cos(op(src_h), tgt_h)) - mean(cos(src_h, tgt_h)) ≥ τ_rel
+     on held-out pairs. Absolute thresholds fail here because
+     source/target cosines are domain-dependent (plural pairs sit
+     at ~0.93 cos in E5 before any operator runs) — identity and
+     near-identity ops trivially pass any reasonable absolute gate.
+     The relative gate measures the only thing we care about: does
+     applying the operator move us CLOSER to the goal than not
+     applying it? Same reframing as silhouette in Task 1.5.2.
 
   2. NON-TRIVIALITY (max cos(op(src), src) < τ_triv) — operator does
      SOMETHING. An identity operator (output ≈ input) fails this;
      so does any operator whose residual MLP collapsed during
      training. τ_triv = 0.99 by default — well below typical
-     plural / past-tense shift cosines.
+     concept-shift cosines.
 
-  3. PLANNER-UTILITY (n_solved_with > n_solved_without) — registering
-     the candidate measurably improves the planner. Run the planner
-     against a held-out task slice with the candidate's expected
-     concept (e.g., a held-out plural pair pool when validating a
-     plural candidate) — once with the baseline operator library,
-     once with the candidate added. The candidate must let the
-     planner reach goals it couldn't reach before. This rules out
-     candidates that are technically learnable but redundant
-     (already covered by an existing operator chain) or harmful
-     (degrade beam search by adding distractor ops).
+  3. PLANNER-UTILITY (RELATIVE) — augmented planner reaches HIGHER
+     cos_to_goal than baseline planner across held-out tasks:
+       mean(aug_cos - baseline_cos) ≥ τ_planner
+     AND ≥ τ_n_tasks tasks individually improved by ≥ τ_per_task.
+     Absolute thresholds fail here for the same reason as criterion 1:
+     depth-0 PlanState (no ops applied) already crosses any
+     reasonable absolute cos in cases where source and target are
+     close. The relative gate measures whether ADDING the candidate
+     to the library changes what the planner can reach.
 
 All three are HARD. If any criterion fails, the candidate is logged
 with the failing reason and not promoted. The registry never sees
@@ -41,7 +44,7 @@ unvalidated entries.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Sequence
+from typing import Callable, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -56,13 +59,19 @@ from selflearnai.planner import BeamSearchPlanner
 
 @dataclass
 class ValidationResult:
-    """Per-candidate audit record. `passes` is the AND of all three."""
+    """Per-candidate audit record. `passes` is the AND of all three.
+
+    All three criteria use RELATIVE gates (improvement over no-op /
+    over baseline planner) — see module docstring for why absolute
+    thresholds fail in encoder-space cosine.
+    """
     candidate_name: str
-    # Criterion 1: generalization (held-out cos→truth)
+    # Criterion 1: generalization (relative; informational absolute mean kept)
     n_holdout: int
-    cos_truth_mean: float
-    cos_truth_min: float
-    cos_truth_threshold: float
+    cos_op_truth_mean: float                # mean cos(op(src_h), tgt_h)  [informational]
+    cos_src_truth_mean: float               # mean cos(src_h, tgt_h)  — no-op baseline
+    cos_truth_improvement: float            # cos_op_truth_mean - cos_src_truth_mean
+    cos_truth_improvement_threshold: float
     passes_cos_truth: bool
     # Criterion 2: non-triviality
     n_triv: int
@@ -70,12 +79,15 @@ class ValidationResult:
     cos_to_input_max: float
     non_triviality_threshold: float
     passes_non_triviality: bool
-    # Criterion 3: planner-utility
+    # Criterion 3: planner-utility (relative)
     n_planner_tasks: int
-    n_baseline_solved: int
-    n_augmented_solved: int
-    utility_improvement: int
-    planner_cos_threshold: float
+    planner_baseline_cos_mean: float
+    planner_augmented_cos_mean: float
+    planner_cos_improvement_mean: float
+    planner_cos_improvement_threshold: float
+    n_tasks_improved: int
+    n_tasks_improved_min: int
+    per_task_improvement_threshold: float
     passes_planner_utility: bool
     # Overall
     passes: bool
@@ -96,14 +108,18 @@ def validate_candidate(
     z_src_for_triviality: torch.Tensor,
     baseline_operators: dict[str, Callable[[torch.Tensor], torch.Tensor]],
     planner_holdout_tasks: Sequence[tuple[torch.Tensor, torch.Tensor]],
-    cos_truth_min: float = 0.85,
+    cos_truth_improvement_min: float = 0.01,
     non_triviality_max_cos: float = 0.99,
-    planner_cos_threshold: float = 0.80,
+    planner_cos_improvement_min: float = 0.01,
+    per_task_improvement_min: float = 0.01,
+    n_tasks_improved_min: int = 1,
     planner_beam_width: int = 4,
     planner_max_depth: int = 3,
     planner_step_bonus: float = 0.015,
 ) -> ValidationResult:
     """Run all three criteria; return a self-explaining ValidationResult.
+
+    All three gates are RELATIVE. See module docstring.
 
     Inputs:
       candidate_op: the trained ConceptOperator under test.
@@ -111,30 +127,42 @@ def validate_candidate(
       z_src_holdout / z_tgt_holdout: held-out pairs from the candidate's
         concept, NOT used during candidate training. Shape [n_h, dim].
       z_src_for_triviality: source embeddings used for the identity-
-        check (typically the candidate's own training sources;
-        running on training data is the strongest test — if the
-        operator can't do anything even on the data it saw, it's
-        certainly trivial). Shape [n_t, dim].
+        check (typically the candidate's own training sources).
+        Shape [n_t, dim].
       baseline_operators: the operator library WITHOUT the candidate.
       planner_holdout_tasks: list of (psi_start, psi_goal) tensors.
         Each is a plain 1-D tensor of shape [dim].
-      cos_truth_min, non_triviality_max_cos, planner_cos_threshold:
-        per-criterion thresholds.
-      planner_beam_width, planner_max_depth, planner_step_bonus:
-        planner config used for both baseline and augmented runs.
-        Identical config — only the operator library changes.
+      cos_truth_improvement_min: criterion 1 threshold (default 0.01,
+        i.e. operator must improve mean cos→truth by ≥ 1% absolute
+        over the no-op baseline).
+      non_triviality_max_cos: criterion 2 threshold (default 0.99).
+      planner_cos_improvement_min: criterion 3 mean-improvement
+        threshold (default 0.01).
+      per_task_improvement_min: per-task improvement threshold for
+        counting "tasks improved" in criterion 3 (default 0.01).
+      n_tasks_improved_min: criterion 3 also requires this many
+        tasks to be individually improved (default 1) — guards
+        against a single outlier task carrying the mean.
+      planner_beam_width / planner_max_depth / planner_step_bonus:
+        planner config, identical between baseline and augmented runs;
+        only the operator library differs.
     """
     failing: list[str] = []
 
-    # --- Criterion 1: generalization on held-out -------------------------
+    # --- Criterion 1: generalization (relative) --------------------------
     pred_h = candidate_op(z_src_holdout)
-    cos_t = F.cosine_similarity(pred_h, z_tgt_holdout, dim=-1)
-    cos_truth_mean = float(cos_t.mean().item())
-    cos_truth_min_val = float(cos_t.min().item())
-    passes_cos_truth = cos_truth_mean >= cos_truth_min
+    cos_op_truth = F.cosine_similarity(pred_h, z_tgt_holdout, dim=-1)
+    cos_src_truth = F.cosine_similarity(z_src_holdout, z_tgt_holdout, dim=-1)
+    cos_op_truth_mean = float(cos_op_truth.mean().item())
+    cos_src_truth_mean = float(cos_src_truth.mean().item())
+    cos_truth_improvement = cos_op_truth_mean - cos_src_truth_mean
+    passes_cos_truth = cos_truth_improvement >= cos_truth_improvement_min
     if not passes_cos_truth:
         failing.append(
-            f"cos_truth_mean={cos_truth_mean:.3f} < threshold={cos_truth_min:.3f}"
+            f"cos_truth_improvement={cos_truth_improvement:+.4f} "
+            f"< threshold={cos_truth_improvement_min:.4f} "
+            f"(op_truth={cos_op_truth_mean:.3f}, "
+            f"src_truth_baseline={cos_src_truth_mean:.3f})"
         )
 
     # --- Criterion 2: non-triviality -------------------------------------
@@ -149,19 +177,18 @@ def validate_candidate(
             f"{non_triviality_max_cos:.3f} (operator is identity-like)"
         )
 
-    # --- Criterion 3: planner-utility ------------------------------------
+    # --- Criterion 3: planner-utility (relative) -------------------------
     n_tasks = len(planner_holdout_tasks)
-    n_baseline_solved = 0
-    n_augmented_solved = 0
+    baseline_cos: list[float] = []
+    augmented_cos: list[float] = []
+    n_tasks_improved = 0
     if n_tasks > 0:
-        # Baseline planner.
         baseline_planner = BeamSearchPlanner(
             operators=baseline_operators,
             beam_width=planner_beam_width,
             max_depth=planner_max_depth,
             step_bonus=planner_step_bonus,
         )
-        # Augmented planner: same config + candidate added under name.
         augmented_ops = {**baseline_operators, candidate_name: candidate_op}
         augmented_planner = BeamSearchPlanner(
             operators=augmented_ops,
@@ -172,17 +199,28 @@ def validate_candidate(
         for psi_start, psi_goal in planner_holdout_tasks:
             base = baseline_planner.search(psi_start, psi_goal)
             aug = augmented_planner.search(psi_start, psi_goal)
-            if base.cos_to_goal >= planner_cos_threshold:
-                n_baseline_solved += 1
-            if aug.cos_to_goal >= planner_cos_threshold:
-                n_augmented_solved += 1
-    utility_improvement = n_augmented_solved - n_baseline_solved
-    passes_planner_utility = utility_improvement > 0
+            baseline_cos.append(base.cos_to_goal)
+            augmented_cos.append(aug.cos_to_goal)
+            if aug.cos_to_goal - base.cos_to_goal >= per_task_improvement_min:
+                n_tasks_improved += 1
+    planner_baseline_mean = (
+        float(sum(baseline_cos) / len(baseline_cos)) if baseline_cos else 0.0
+    )
+    planner_augmented_mean = (
+        float(sum(augmented_cos) / len(augmented_cos)) if augmented_cos else 0.0
+    )
+    planner_cos_improvement_mean = planner_augmented_mean - planner_baseline_mean
+    passes_planner_utility = (
+        planner_cos_improvement_mean >= planner_cos_improvement_min
+        and n_tasks_improved >= n_tasks_improved_min
+    )
     if not passes_planner_utility:
         failing.append(
-            f"planner_utility: augmented_solved={n_augmented_solved} "
-            f"<= baseline_solved={n_baseline_solved} "
-            f"(no measurable improvement)"
+            f"planner-utility: improvement_mean="
+            f"{planner_cos_improvement_mean:+.4f} "
+            f"(threshold ≥ {planner_cos_improvement_min:.4f}), "
+            f"tasks_improved={n_tasks_improved}/{n_tasks} "
+            f"(threshold ≥ {n_tasks_improved_min})"
         )
 
     overall = passes_cos_truth and passes_non_triviality and passes_planner_utility
@@ -190,9 +228,10 @@ def validate_candidate(
     return ValidationResult(
         candidate_name=candidate_name,
         n_holdout=int(z_src_holdout.shape[0]),
-        cos_truth_mean=cos_truth_mean,
-        cos_truth_min=cos_truth_min_val,
-        cos_truth_threshold=cos_truth_min,
+        cos_op_truth_mean=cos_op_truth_mean,
+        cos_src_truth_mean=cos_src_truth_mean,
+        cos_truth_improvement=cos_truth_improvement,
+        cos_truth_improvement_threshold=cos_truth_improvement_min,
         passes_cos_truth=passes_cos_truth,
         n_triv=int(z_src_for_triviality.shape[0]),
         cos_to_input_mean=cos_self_mean,
@@ -200,10 +239,13 @@ def validate_candidate(
         non_triviality_threshold=non_triviality_max_cos,
         passes_non_triviality=passes_non_triviality,
         n_planner_tasks=n_tasks,
-        n_baseline_solved=n_baseline_solved,
-        n_augmented_solved=n_augmented_solved,
-        utility_improvement=utility_improvement,
-        planner_cos_threshold=planner_cos_threshold,
+        planner_baseline_cos_mean=planner_baseline_mean,
+        planner_augmented_cos_mean=planner_augmented_mean,
+        planner_cos_improvement_mean=planner_cos_improvement_mean,
+        planner_cos_improvement_threshold=planner_cos_improvement_min,
+        n_tasks_improved=n_tasks_improved,
+        n_tasks_improved_min=n_tasks_improved_min,
+        per_task_improvement_threshold=per_task_improvement_min,
         passes_planner_utility=passes_planner_utility,
         passes=overall,
         failing_criteria=failing,

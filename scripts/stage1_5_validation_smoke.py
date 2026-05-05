@@ -5,6 +5,22 @@ candidate and rejects two known-bad candidates with the right failure
 modes. Without exercising both directions, the gate could trivially
 pass everything (false-PASS bug) or reject everything (false-FAIL bug).
 
+Reframe note (after first run): all three criteria are RELATIVE.
+
+The first-draft gates used absolute thresholds: cos→truth ≥ 0.85 and
+planner_cos_to_goal ≥ 0.80. Both passed for ALL three test
+candidates because plural pairs in E5 already sit at cos≈0.93 in
+encoder space — identity hits 0.931 trivially, and depth-0 PlanState
+crosses 0.80 without applying any operator. The absolute thresholds
+were below the no-op baseline; they couldn't distinguish good from
+bad candidates.
+
+Same reframing pattern as Tasks 1.12 and 1.5.2: when encoder
+geometry dominates the absolute signal, gate on RELATIVE improvement
+over the no-op baseline, not absolute thresholds. See
+selflearnai/discovery/validate.py module docstring for the full
+explanation.
+
 Setup:
 
   Concept under test: PLURAL (44 train pairs in repo, plenty for a
@@ -93,9 +109,14 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--baseline-epochs", type=int, default=2000)
     parser.add_argument("--candidate-epochs", type=int, default=2000)
-    parser.add_argument("--cos-truth-min", type=float, default=0.85)
+    parser.add_argument("--cos-truth-improvement-min", type=float, default=0.01,
+                        help="Min mean(cos(op(src),tgt) - cos(src,tgt)) on held-out.")
     parser.add_argument("--non-triviality-max-cos", type=float, default=0.99)
-    parser.add_argument("--planner-cos-threshold", type=float, default=0.80)
+    parser.add_argument("--planner-cos-improvement-min", type=float, default=0.01,
+                        help="Min mean(aug_cos - base_cos) across tasks.")
+    parser.add_argument("--per-task-improvement-min", type=float, default=0.01,
+                        help="Per-task improvement to count as 'improved'.")
+    parser.add_argument("--n-tasks-improved-min", type=int, default=1)
     parser.add_argument("--planner-beam-width", type=int, default=4)
     parser.add_argument("--planner-max-depth", type=int, default=3)
     parser.add_argument("--out", default="results/stage1_5/validation_smoke.json")
@@ -130,9 +151,11 @@ def main() -> None:
     print(f"\nPlural pairs: {len(candidate_train_pairs)} train + "
           f"{len(holdout_pairs)} held-out")
 
-    print("Encoding train + held-out plural pairs ...")
+    print("Encoding train sources + held-out plural pairs ...")
+    # z_src_train is reused as z_src_for_triviality (criterion 2 input).
+    # train_operator() encodes its own pairs internally — no need to
+    # pre-encode targets here.
     z_src_train = encode([p[0] for p in candidate_train_pairs])
-    z_tgt_train = encode([p[1] for p in candidate_train_pairs])
     z_src_holdout = encode([p[0] for p in holdout_pairs])
     z_tgt_holdout = encode([p[1] for p in holdout_pairs])
 
@@ -200,9 +223,11 @@ def main() -> None:
         z_src_for_triviality=z_src_train,
         baseline_operators=baseline_operators,
         planner_holdout_tasks=planner_holdout_tasks,
-        cos_truth_min=args.cos_truth_min,
+        cos_truth_improvement_min=args.cos_truth_improvement_min,
         non_triviality_max_cos=args.non_triviality_max_cos,
-        planner_cos_threshold=args.planner_cos_threshold,
+        planner_cos_improvement_min=args.planner_cos_improvement_min,
+        per_task_improvement_min=args.per_task_improvement_min,
+        n_tasks_improved_min=args.n_tasks_improved_min,
         planner_beam_width=args.planner_beam_width,
         planner_max_depth=args.planner_max_depth,
     )
@@ -226,17 +251,24 @@ def main() -> None:
         c3 = "✓" if r.passes_planner_utility else "✗"
         overall = "PASS" if r.passes else "FAIL"
         print(
-            f"   {c1} generalization     mean={r.cos_truth_mean:.3f}  "
-            f"min={r.cos_truth_min:.3f}  threshold≥{r.cos_truth_threshold:.2f}"
+            f"   {c1} generalization     "
+            f"op_truth={r.cos_op_truth_mean:.3f}  "
+            f"src_truth_baseline={r.cos_src_truth_mean:.3f}  "
+            f"Δ={r.cos_truth_improvement:+.4f}  "
+            f"threshold≥{r.cos_truth_improvement_threshold:+.4f}"
         )
         print(
             f"   {c2} non-triviality     max(cos→input)={r.cos_to_input_max:.3f}  "
             f"threshold<{r.non_triviality_threshold:.2f}"
         )
         print(
-            f"   {c3} planner-utility    baseline={r.n_baseline_solved}  "
-            f"augmented={r.n_augmented_solved}  Δ={r.utility_improvement}  "
-            f"(of {r.n_planner_tasks} tasks, planner cos≥{r.planner_cos_threshold:.2f})"
+            f"   {c3} planner-utility    "
+            f"baseline_cos={r.planner_baseline_cos_mean:.3f}  "
+            f"aug_cos={r.planner_augmented_cos_mean:.3f}  "
+            f"Δ={r.planner_cos_improvement_mean:+.4f}  "
+            f"tasks_improved={r.n_tasks_improved}/{r.n_planner_tasks} "
+            f"(threshold≥{r.planner_cos_improvement_threshold:+.4f}, "
+            f"≥{r.n_tasks_improved_min} task)"
         )
         print(f"   → overall: {overall}")
         if r.failing_criteria:
@@ -247,12 +279,14 @@ def main() -> None:
             "passes_non_triviality": r.passes_non_triviality,
             "passes_planner_utility": r.passes_planner_utility,
             "passes": r.passes,
-            "cos_truth_mean": r.cos_truth_mean,
-            "cos_truth_min": r.cos_truth_min,
+            "cos_op_truth_mean": r.cos_op_truth_mean,
+            "cos_src_truth_mean": r.cos_src_truth_mean,
+            "cos_truth_improvement": r.cos_truth_improvement,
             "cos_to_input_max": r.cos_to_input_max,
-            "n_baseline_solved": r.n_baseline_solved,
-            "n_augmented_solved": r.n_augmented_solved,
-            "utility_improvement": r.utility_improvement,
+            "planner_baseline_cos_mean": r.planner_baseline_cos_mean,
+            "planner_augmented_cos_mean": r.planner_augmented_cos_mean,
+            "planner_cos_improvement_mean": r.planner_cos_improvement_mean,
+            "n_tasks_improved": r.n_tasks_improved,
             "failing_criteria": r.failing_criteria,
         }
 
@@ -293,9 +327,17 @@ def main() -> None:
         "n_candidate_train": N_TRAIN_FOR_CANDIDATE,
         "n_holdout": N_HOLDOUT_PAIRS,
         "thresholds": {
-            "cos_truth_min": args.cos_truth_min,
+            "cos_truth_improvement_min": args.cos_truth_improvement_min,
             "non_triviality_max_cos": args.non_triviality_max_cos,
-            "planner_cos_threshold": args.planner_cos_threshold,
+            "planner_cos_improvement_min": args.planner_cos_improvement_min,
+            "per_task_improvement_min": args.per_task_improvement_min,
+            "n_tasks_improved_min": args.n_tasks_improved_min,
+            "note": (
+                "All three criteria use RELATIVE gates (improvement "
+                "over no-op / baseline planner). Absolute thresholds "
+                "fail in encoder-space cosine because src/tgt cosines "
+                "are domain-dependent — see validate.py module docstring."
+            ),
         },
         "candidates": results,
         "acceptance": {
