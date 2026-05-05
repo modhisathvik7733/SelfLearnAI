@@ -29,6 +29,11 @@ from .registry import (
     DomainRegistry,
     DomainVersion,
 )
+from .ingest import (
+    IngestionConfig,
+    IngestionResult,
+    ingest_domain,
+)
 
 __all__ = [
     "EnergyModelBase",
@@ -38,4 +43,7 @@ __all__ = [
     "DomainEntry",
     "DomainRegistry",
     "DomainVersion",
+    "IngestionConfig",
+    "IngestionResult",
+    "ingest_domain",
 ]
