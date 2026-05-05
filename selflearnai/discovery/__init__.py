@@ -59,6 +59,11 @@ from .refactor import (
     mine_subchain_candidates,
     promote_macros,
 )
+from .registry import (
+    ConceptEntry,
+    ConceptRegistry,
+    ConceptVersion,
+)
 
 __all__ = [
     "WakeBuffer",
@@ -86,4 +91,7 @@ __all__ = [
     "make_macro_op",
     "mine_subchain_candidates",
     "promote_macros",
+    "ConceptEntry",
+    "ConceptRegistry",
+    "ConceptVersion",
 ]
