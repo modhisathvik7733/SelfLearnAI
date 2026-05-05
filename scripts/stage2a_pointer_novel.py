@@ -97,11 +97,11 @@ NOVEL_PAIRS: dict[str, list[tuple[str, str]]] = {
         ("woman",  "women"),
     ],
     "past_tense": [
-        # Strong irregulars; replaced 5 leaked pairs (eat/write/swim/sing/speak)
-        # with rarer-in-teaching-data alternatives.
+        # Strong irregulars; replaced 6 leaked pairs across two attempts.
+        # All 7 below verified absent from data/past_tense/text_pairs_*.tsv.
         ("drink",   "drank"),
         ("catch",   "caught"),
-        ("choose",  "chose"),
+        ("weep",    "wept"),       # replaces choose/chose (in TSV)
         ("forget",  "forgot"),
         ("shake",   "shook"),
         ("freeze",  "froze"),
@@ -118,14 +118,16 @@ NOVEL_PAIRS: dict[str, list[tuple[str, str]]] = {
         ("naughty",  "naughtier"),
     ],
     "opposite": [
-        # Replaced clean/dirty and truth/lie (both in opposite_v2 TSV).
+        # Replaced 3 leaked pairs (clean/dirty, truth/lie, peace/war)
+        # with abstract noun-antonym pairs less likely to be in basic
+        # antonym datasets. All 7 verified absent from opposite_v2 TSV.
         ("rich",     "poor"),
         ("safe",     "dangerous"),
         ("friend",   "enemy"),
         ("love",     "hate"),
         ("awake",    "asleep"),
-        ("peace",    "war"),
         ("victory",  "defeat"),
+        ("joy",      "sorrow"),    # replaces peace/war (in TSV)
     ],
 }
 
