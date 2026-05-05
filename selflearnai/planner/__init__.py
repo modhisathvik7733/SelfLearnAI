@@ -38,6 +38,13 @@ from .verifier import (
     TypeGate,
     verify_chain,
 )
+from .trace import (
+    PsiProgram,
+    PsiProgramStep,
+    ReplayResult,
+    build_psi_program,
+    replay,
+)
 
 __all__ = [
     "BeamSearchPlanner",
@@ -56,4 +63,9 @@ __all__ = [
     "StepVerification",
     "TypeGate",
     "verify_chain",
+    "PsiProgram",
+    "PsiProgramStep",
+    "ReplayResult",
+    "build_psi_program",
+    "replay",
 ]
