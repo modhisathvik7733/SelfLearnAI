@@ -24,10 +24,18 @@ from .energy import (
     MLPEnergyModel,
     roc_auc,
 )
+from .registry import (
+    DomainEntry,
+    DomainRegistry,
+    DomainVersion,
+)
 
 __all__ = [
     "EnergyModelBase",
     "GaussianEnergy",
     "MLPEnergyModel",
     "roc_auc",
+    "DomainEntry",
+    "DomainRegistry",
+    "DomainVersion",
 ]
