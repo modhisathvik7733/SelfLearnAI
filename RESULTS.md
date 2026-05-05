@@ -904,3 +904,139 @@ python3 scripts/sample_efficiency_curve.py \
 ```
 
 Outputs land in `checkpoints/`, `logs/`, `results/sample_efficiency.csv`.
+
+---
+
+## Phase 2a — non-AR text generation (validated)
+
+After Stages 0/0.5/1/1.5 closed (concept operators, calibration, planner, concept discovery), the system could **reason** in Ψ-space but not **express** that reasoning in surface forms. Phase 2a closes this gap. Per plan §13.9 this was the architecture's highest-risk piece — if the universal non-AR generator failed, the roadmap would have downgraded to per-domain structural backbones.
+
+**Phase 2a passed its production closing gate.** Full closing report: [results/stage2a/closing_report.md](results/stage2a/closing_report.md). Plan record: §19.13 (empirical journey) + §19.14 (locked architecture) + §19.15 (closeout).
+
+### Headline (sub-task 2a.3, production training)
+
+Eval on **432 truly-novel held-out sentences** — word pairs the model never saw during training (`mouse/mice`, `child/children`, `weep/wept`, `joy/sorrow`, `victory/defeat`, ...).
+
+| Metric | Result | §19.14 gate |
+|---|---|---|
+| Median cos(encode(generated), ψ_target) | **1.0000** | ≥ 0.90 ✓ |
+| Sentences grammatical (proxy) | **431/432 (99.8%)** | ≥ 95% ✓ |
+| Sentences with BOTH src + tgt words | **372/432 (86.1%)** | ≥ 80% ✓ |
+| Bit-exact reproduction | 371/432 (85.9%) | informational |
+
+Per-concept breakdown:
+
+| Concept | Word-fidelity | Bit-exact | Notes |
+|---|---|---|---|
+| **opposite** | 108/108 (100%) | 108/108 | Perfect on abstract antonyms (joy/sorrow, victory/defeat, friend/enemy, hero/villain) |
+| **plural** | 96/108 (89%) | 96/108 | Includes irregulars: mice, children, feet, teeth, geese, men, women |
+| **past_tense** | 96/108 (89%) | 95/108 | Includes strong irregulars: drank, caught, wept, forgot, shook, froze, forgave |
+| **comparative** | 72/108 (67%) | 72/108 | Multi-subword compounds (`prettier`, `cleverer`) — documented limitation, see below |
+
+### Architecture (locked)
+
+```
+ψ ∈ R^{1024}  →  [frozen E5-large-v2]  →  h ∈ R^{B × T_in × 1024}
+                                                    │
+                                                    ▼
+                  perturb_h (Gaussian δ=0.7 / mask 30%, p=0.3)
+                                                    │
+                                                    ▼
+                  feat_dropout(cond_proj(h), p=0.2)
+                                                    │
+                                                    ▼
+              T_out learnable position seeds  +
+              bidirectional self-attention  +
+              cross-attention to memory (nn.TransformerDecoder)
+                                                    │
+                                                    ▼
+                                  decoder_hidden ∈ R^{B × T_out × h}
+                          ┌─────────────────────────┼─────────────────────────┐
+                          ▼                         ▼                         ▼
+                    token_head             [ptr_q · ptr_kᵀ      gen_gate (→ p_gen)
+                    (vocab logits)          → softmax]
+                          │                         │
+                          ▼                         ▼
+                    P_vocab            P_copy ← scatter via input_token_ids
+                          │                         │
+                          └── p_gen·P_vocab + (1−p_gen)·P_copy ──┘
+                                                    │
+                                                    ▼
+                          NLL on mixture + λ_MSE · activation MSE
+```
+
+Key choices, all empirically driven (full journey in §19.13):
+- **Sequence conditioning** on the encoder's full activation sequence h ∈ R^{T×1024}, NOT pooled ψ. Pooling was the v1 mistake (sub-task 2a.0c failed because pooled ψ loses word-level info).
+- **Pointer-Generator output head** (See/Liu/Manning 2017): per-position mixture of vocab logits and copy-attention over encoder input tokens. The copy mechanism is what makes word-fidelity work on truly-novel inputs.
+- **Joint loss**: parallel position-wise NLL on the mixture + 0.5·MSE between decoder hidden and encoder activations. Paper §4.2.2 ablation: MSE alone gives +58% MAUVE over CE-only.
+- **Augmentation**: Gaussian-noise / token-mask perturbation on encoder activations + feature dropout on conditioning tokens.
+- **Training**: 30K steps batch 32 on a single A100, AdamW lr=2e-4 with 1500-step linear warmup.
+
+Implementation: `selflearnai/generator/` package (commit c938b93). Production checkpoint: `data/explanations_v2/checkpoints/decoder_2a3.pt`.
+
+### Why this isn't an LLM
+
+The architecture explicitly avoids every one of the 25 LLM problems the project was started to fix:
+
+| Problem | How Phase 2a avoids it |
+|---|---|
+| Next-token prediction | Parallel position-wise NLL on a mixture distribution. No causal masking. Bidirectional self-attention. Per LLaDA precedent + Cosmos paper validation. |
+| Hallucination | Copy mechanism reads from encoder activations. Outputs that don't trace to vocab OR encoder input have very low probability. |
+| No grounding | Every output is a deterministic function of (ψ, encoder activations). The Ψ-program trace from Stages 0–1.5 carries through. |
+| Opacity | `p_gen` is per-position interpretable: "generate from vocab" vs "copy from input position N". |
+| Catastrophic forgetting | Decoder is small + per-domain. Stage 3 will add domains by training new tiny decoders, not by retraining everything. |
+
+### Comparison points
+
+| Metric | Phase 2a | Comparable LLM-class |
+|---|---|---|
+| Bit-exact reconstruction on truly-novel | 86% | vec2text (Morris et al 2023) — 92% bit-exact via T5 (autoregressive) + iterative refinement, trained on 8.8M docs over ~24h GPU |
+| Grammar (proxy) | 99.8% | Standard LMs typically 95-99% on similar tasks |
+| Hallucination | None observed (every output traces to copy or vocab) | Frequent and undetectable in standard LMs |
+| Reasoning trace | Full Ψ-program audit trail (Stages 0–1.5 + Phase 2a) | None — can ask, may not match what model did |
+| Compute | ~30 GPU-hours total (entire Phase 2a, 1 A100) | LLMs: $millions, weeks-months |
+
+We're not competing on GPT-class breadth. We're showing that for the *narrow domain* PsiNet has concepts for, the architecture produces near-perfect, verifiable, fluent output at < 0.001% of LLM training cost.
+
+### Empirical journey (the path that got here)
+
+Six diagnostic sub-tasks before the production build, each commit-recorded, each driving an architectural decision:
+
+| Sub-task | Architecture under test | Verdict | Insight gained |
+|---|---|---|---|
+| 2a.0 | Free continuous matrix optimization + token snap | Reject (qualitative) | Token-snap from continuous optimization produces word-salad — Approach A is dead. |
+| 2a.0b | Single-pooled-ψ tiny decoder, CE-only on 50 sentences | CAPACITY_PASS | The encoder pooled vector carries enough info to memorize sentences. |
+| 2a.0c | Single-pooled-ψ + paper recipe (CE+MSE+perturb) on 1036 train + 168 holdout | False positive PASS | Cos passed 0.91 median but **0/168 exact match** — model produced templates with random word pairs. The cos gate alone measures template+domain similarity, not word fidelity. |
+| 2a.0d | **Sequence conditioning** (cross-attn on full encoder activations) | WORD_FIDELITY_FAIL | Even with full activation cross-attention, model didn't extract specific words. Pointer-generator was the missing piece. |
+| 2a.0e | Sequence-cond + **Pointer-Generator** | POINTER_PASS | 152/168 word-fidelity, 151/168 bit-exact on friendly held-out. The copy mechanism is the structural fix. |
+| 2a.0f | Same architecture, **truly-novel held-out** | TRULY_NOVEL_PASS | 159/196 word-fidelity (81%), 157/196 bit-exact (80%) on words the model never saw. Architecture generalizes. |
+
+Then production scaling (sub-tasks 2a.1 → 2a.7).
+
+### Documented limitations (deferred)
+
+**Multi-subword copy on the comparative concept** (67% word-fidelity).
+
+BERT WordPiece tokenizes `prettier → [pretty, ##ier]`. The pointer-generator copies one token at a time. Failure pattern:
+
+```
+target:    'the comparative of pretty is prettier'
+generated: 'the comparative of pretty isttier'
+```
+
+Sub-task 2a.4 attempted a position-alignment-bias fix (Path A) that didn't lift the result (72 → 71). The deeper fix (span-copy mechanism — pointer outputs a contiguous range of encoder positions) is documented in plan §19.14 as a Stage 3 follow-up where the same fix benefits multiple domains.
+
+**Multi-candidate sampling provides no lift in this regime.** Sub-task 2a.5 verified that K=5 Gumbel sampling + ψ-fidelity reranking = 0.000 median lift over greedy. The model's output distribution is too peaked after training for sampling to find a better candidate. This doesn't invalidate plan §9.2 — at flatter distributions or larger scales, sampling could matter. Phase 2a-scale models on a tight corpus, greedy is empirically optimal.
+
+### What Phase 2a unlocks
+
+The system can now **speak its reasoning**. Stage 1's intent module + planner + verifier produce a Ψ-program. Phase 2a's decoder converts that Ψ-program to fluent English text with full audit trail. This is what Stage 3 (universal domain ingestion) builds on top of: each new domain trains a small per-domain decoder following the same recipe.
+
+Reproduce:
+
+```bash
+python scripts/stage2a_1_corpus.py            # generate 2064 train + 432 holdout
+python scripts/stage2a_2_package_smoke.py     # verify selflearnai/generator/
+python scripts/stage2a_3_train.py             # ~6-8 hr GPU, full training run
+python scripts/stage2a_regression.py          # closing-regression check
+```
