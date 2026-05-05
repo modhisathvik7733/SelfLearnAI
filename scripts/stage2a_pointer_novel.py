@@ -59,7 +59,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch
 import torch.nn.functional as F
 
-from scripts.stage1_planner_beam_smoke import ENCODERS, make_encode_fn, read_pairs
+from scripts.stage1_planner_beam_smoke import ENCODERS, read_pairs
 from scripts.stage2a_quick_probe import grammar_grade, grammar_proxy
 from scripts.stage2a_generalization import (
     CONCEPT_DATA_DIRS,
@@ -87,40 +87,45 @@ from scripts.stage2a_pointer import PointerSeqCondDecoder
 
 NOVEL_PAIRS: dict[str, list[tuple[str, str]]] = {
     "plural": [
-        ("mouse", "mice"),
-        ("child", "children"),
-        ("foot",  "feet"),
-        ("tooth", "teeth"),
-        ("goose", "geese"),
-        ("man",   "men"),
-        ("woman", "women"),
+        # Irregular plurals — none of these in plurality TSVs
+        ("mouse",  "mice"),
+        ("child",  "children"),
+        ("foot",   "feet"),
+        ("tooth",  "teeth"),
+        ("goose",  "geese"),
+        ("man",    "men"),
+        ("woman",  "women"),
     ],
     "past_tense": [
-        ("eat",    "ate"),
-        ("write",  "wrote"),
-        ("swim",   "swam"),
-        ("drink",  "drank"),
-        ("sing",   "sang"),
-        ("speak",  "spoke"),
-        ("catch",  "caught"),
+        # Strong irregulars; replaced 5 leaked pairs (eat/write/swim/sing/speak)
+        # with rarer-in-teaching-data alternatives.
+        ("drink",   "drank"),
+        ("catch",   "caught"),
+        ("choose",  "chose"),
+        ("forget",  "forgot"),
+        ("shake",   "shook"),
+        ("freeze",  "froze"),
+        ("forgive", "forgave"),
     ],
     "comparative": [
-        ("pretty",  "prettier"),
-        ("simple",  "simpler"),
-        ("gentle",  "gentler"),
-        ("heavy",   "heavier"),
-        ("narrow",  "narrower"),
-        ("clever",  "cleverer"),
-        ("lonely",  "lonelier"),
+        # Replaced heavy→heavier and narrow→narrower (both in comparative TSV).
+        ("pretty",   "prettier"),
+        ("simple",   "simpler"),
+        ("gentle",   "gentler"),
+        ("clever",   "cleverer"),
+        ("lonely",   "lonelier"),
+        ("friendly", "friendlier"),
+        ("naughty",  "naughtier"),
     ],
     "opposite": [
-        ("rich",   "poor"),
-        ("safe",   "dangerous"),
-        ("friend", "enemy"),
-        ("love",   "hate"),
-        ("awake",  "asleep"),
-        ("clean",  "dirty"),
-        ("truth",  "lie"),
+        # Replaced clean/dirty and truth/lie (both in opposite_v2 TSV).
+        ("rich",     "poor"),
+        ("safe",     "dangerous"),
+        ("friend",   "enemy"),
+        ("love",     "hate"),
+        ("awake",    "asleep"),
+        ("peace",    "war"),
+        ("victory",  "defeat"),
     ],
 }
 
@@ -466,6 +471,7 @@ def main() -> None:
         print(f"      src_in={r['src_in_gen']}  tgt_in={r['tgt_in_gen']}  "
               f"p_gen={r['p_gen_mean']:.3f}  "
               f"{cos_mark} cos={r['cos_recovered']:.3f}  "
+              f"{gr_mark} LT={r['lt_n_errors']}  "
               f"{wf_mark} fidelity={'BOTH' if r['both_in_gen'] else ('SOME' if r['src_in_gen'] or r['tgt_in_gen'] else 'NONE')}")
 
     print(f"\nPer-concept aggregate (across all 7 templates):")
