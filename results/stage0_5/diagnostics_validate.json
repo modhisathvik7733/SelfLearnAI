@@ -1,0 +1,26 @@
+{
+  "task": "0.5.4",
+  "structural": [
+    {
+      "name": "antonym",
+      "pass": true,
+      "n_rows": 30,
+      "n_unique": 30
+    },
+    {
+      "name": "code_struct",
+      "pass": true,
+      "n_rows": 10,
+      "n_unique": 10
+    },
+    {
+      "name": "paraphrase",
+      "pass": true,
+      "n_rows": 30,
+      "n_unique": 30
+    }
+  ],
+  "encoded": null,
+  "encoder": null,
+  "pass": true
+}

@@ -1,0 +1,27 @@
+# Encoder diagnostic — code structural similarity.
+#
+# Format: anchor TAB structurally_equivalent TAB structurally_different
+# Test:   the structurally_equivalent column has the SAME control-flow
+#         and operator structure as the anchor, just renamed identifiers
+#         or trivial substitutions. The structurally_different column
+#         has DIFFERENT control flow / role.
+#
+# Score per row: cos(anchor, equivalent) − cos(anchor, different).
+# Mean score across rows = encoder's code-structure quality.
+# Higher = encoder captures program structure (essential for code-domain
+# operators in Stage 4). Low / negative = encoder treats code as
+# bag-of-tokens; will need an adapter or code-specific encoder.
+#
+# 10 single-line Python rows (TSV-friendly; multi-line code would need
+# escape handling we are deliberately avoiding here).
+
+for i in range(10): print(i)	for j in range(10): print(j)	x = 5
+def add(a, b): return a + b	def sum(x, y): return x + y	print('hello')
+if x > 0: y = x	if a > 0: b = a	y = x + 1
+lst = [1, 2, 3]	arr = [4, 5, 6]	d = {'a': 1}
+result = [a for a in data if a > 0]	result = [b for b in items if b > 0]	result = sum(data)
+class Foo(Base): pass	class Bar(Parent): pass	def func(): return 1
+try: f() except Exception: pass	try: g() except Exception: pass	f(); g()
+lambda x: x + 1	lambda y: y + 1	def f(x): return x + 1
+with open(f) as h: data = h.read()	with open(g) as h: data = h.read()	open(f).read()
+x += 1	y += 1	x = []

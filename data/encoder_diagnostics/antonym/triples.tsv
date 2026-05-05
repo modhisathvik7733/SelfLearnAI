@@ -1,0 +1,66 @@
+# Encoder diagnostic — antonym separation.
+#
+# Format: anchor TAB synonym TAB antonym
+# Test:   for an encoder useful in our architecture, cos(anchor, synonym)
+#         should be GREATER than cos(anchor, antonym).
+# Score per row: cos(anchor, synonym) − cos(anchor, antonym).
+# Mean score across rows = encoder's antonym-separation quality.
+# Higher = encoder cleanly separates synonym vs antonym geometry.
+#
+# Why this matters here: our concept operators apply learned shifts in
+# the encoder's latent space. If the encoder buries antonyms inside
+# synonym clusters (e.g. cos(warm, sick) ≈ cos(warm, cool) — the
+# documented failure mode in RESULTS.md "Multi-axial re-diagnosis"),
+# no operator architecture can win retrieval. This suite gives a
+# scalar score per encoder that flags this risk before it bites.
+#
+# 30 triples spanning size, temperature, brightness, emotion, truth,
+# state-of-existence, and quality axes.
+
+# --- Temperature ---
+warm	hot	cold
+cool	cold	hot
+hot	scorching	cold
+cold	freezing	hot
+
+# --- Size / dimension ---
+big	large	small
+small	tiny	big
+tall	high	short
+short	low	tall
+wide	broad	narrow
+narrow	thin	wide
+
+# --- Speed ---
+fast	quick	slow
+slow	sluggish	fast
+
+# --- State of brightness / quality ---
+bright	luminous	dark
+dark	dim	bright
+loud	noisy	quiet
+quiet	silent	loud
+
+# --- Quality / cleanliness / state ---
+clean	pure	dirty
+dirty	filthy	clean
+wet	damp	dry
+dry	arid	wet
+
+# --- Open / closed ---
+open	unsealed	closed
+closed	sealed	open
+
+# --- Strength / weight ---
+heavy	weighty	light
+light	weightless	heavy
+strong	powerful	weak
+weak	frail	strong
+
+# --- Emotion ---
+happy	joyful	sad
+sad	sorrowful	happy
+
+# --- Age / freshness ---
+new	fresh	old
+old	ancient	new

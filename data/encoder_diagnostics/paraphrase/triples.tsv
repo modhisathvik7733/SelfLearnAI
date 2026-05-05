@@ -1,0 +1,44 @@
+# Encoder diagnostic — paraphrase invariance.
+#
+# Format: anchor TAB paraphrase TAB unrelated
+# Test:   paraphrase column has the same MEANING as anchor in different
+#         words / surface form. unrelated column is a sentence on a
+#         different topic.
+#
+# Score per row: cos(anchor, paraphrase) − cos(anchor, unrelated).
+# Mean score = encoder's paraphrase-invariance quality. Higher = encoder
+# captures meaning over surface form (necessary for the universal
+# generator's latent-reconstruction loss in Stage 2).
+#
+# 30 triples mixing simple → moderate paraphrase difficulty.
+
+The dog chased the cat.	The cat was pursued by the dog.	The book lies on the table.
+She runs every morning.	She jogs each morning.	The sky is blue today.
+He bought a new car.	He purchased a new vehicle.	The cake tasted delicious.
+They went to the store.	They visited the shop.	The river flows north.
+The book is on the table.	The book sits atop the table.	Water boils at 100 degrees.
+I love pizza.	I really like pizza.	The mountain is tall.
+She wrote a poem.	She composed a poem.	He fixed the broken chair.
+The teacher explained the lesson.	The teacher described the lesson.	Birds fly south for winter.
+He missed the bus.	He didn't catch the bus.	The flower bloomed in spring.
+They argued for hours.	They quarreled for hours.	The painting hung crooked.
+She climbed the mountain.	She ascended the mountain.	The alarm rang at dawn.
+He fell asleep quickly.	He dozed off rapidly.	The road turns left here.
+The child laughed.	The kid giggled.	The clock struck midnight.
+We finished the project.	We completed the project.	The pen ran out of ink.
+She painted the wall.	She covered the wall in paint.	The boat sailed away.
+He told a joke.	He cracked a joke.	The wind blew softly.
+They lost the game.	They were defeated in the game.	The bread is fresh.
+The cat slept all day.	The cat snoozed all day.	The chef cooked dinner.
+She forgot her keys.	She left her keys behind.	The phone rang loudly.
+He repaired the engine.	He fixed the engine.	The grass grew tall.
+They built a house.	They constructed a home.	The clock is broken.
+She danced gracefully.	She moved with grace.	The window was shut.
+He answered the question.	He responded to the question.	The dog wagged its tail.
+The river flows fast.	The river runs swiftly.	The book has many pages.
+She caught the ball.	She grabbed the ball.	The sun set in the west.
+He walked to school.	He made his way to school on foot.	The cake was sweet.
+They sang together.	They sang in unison.	The road was empty.
+The artist drew a picture.	The artist sketched an image.	The leaf fell silently.
+She smiled warmly.	She gave a warm smile.	The candle burned brightly.
+He listened carefully.	He paid close attention.	The path was steep.
