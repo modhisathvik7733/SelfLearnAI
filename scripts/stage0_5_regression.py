@@ -117,14 +117,22 @@ def extract_text_only_max(stdout: str) -> Optional[float]:
 
 
 def extract_analogy_mean(stdout: str) -> Optional[float]:
-    """Find a 'mean' or 'average' line. analogy_demo prints the family
-    mean somewhere in its summary; we conservatively pick the largest
-    'mean ... = X.XX' pattern in the output."""
-    # Find lines like: "mean accuracy ... 0.867" or "mean: 0.867"
-    candidates: list[float] = []
-    for m in re.finditer(r"(?i)\bmean[^:=\n]*[=:]\s*([0-9]\.[0-9]+)", stdout):
-        candidates.append(float(m.group(1)))
-    return max(candidates) if candidates else None
+    """Find the per-family analogy mean. analogy_demo's verdict block
+    prints e.g. 'Per-family analogy accuracy (avg):  0.867'."""
+    # Primary: the "(avg)" line in the VERDICT block.
+    m = re.search(
+        r"Per-family analogy accuracy\s*\(avg\)\s*:\s*([0-9]\.[0-9]+)",
+        stdout,
+    )
+    if m:
+        return float(m.group(1))
+    # Fallback: the OVERALL summary row in the per-family table.
+    m = re.search(
+        r"^\s*OVERALL\s+\S+\s+([0-9]\.[0-9]+)", stdout, re.MULTILINE,
+    )
+    if m:
+        return float(m.group(1))
+    return None
 
 
 # --- Workflow runners ------------------------------------------------------
