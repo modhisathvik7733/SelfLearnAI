@@ -25,6 +25,17 @@ from .prior import (
     OperatorPriorPrediction,
     make_prior_callable,
 )
+from .verifier import (
+    AxiomGate,
+    ChainVerification,
+    DEFAULT_TYPE_SIGNATURES,
+    DriftGate,
+    Gate,
+    GateResult,
+    StepVerification,
+    TypeGate,
+    verify_chain,
+)
 
 __all__ = [
     "BeamSearchPlanner",
@@ -32,4 +43,13 @@ __all__ = [
     "OperatorPriorMLP",
     "OperatorPriorPrediction",
     "make_prior_callable",
+    "AxiomGate",
+    "ChainVerification",
+    "DEFAULT_TYPE_SIGNATURES",
+    "DriftGate",
+    "Gate",
+    "GateResult",
+    "StepVerification",
+    "TypeGate",
+    "verify_chain",
 ]
