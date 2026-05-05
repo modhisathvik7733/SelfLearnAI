@@ -172,7 +172,10 @@ def main() -> None:
     src_in2, tgt_in2, both2 = word_pair_fidelity("book", "books", "the plural of leg is hands")
     check("neither word → both_in_gen=False", not both2)
 
-    verdicts = [
+    # Test BOTH directions of the gates with a 3-verdict roll-up.
+    # n=3, word_fidelity_min=0.70 → target = int(0.70*3) = 2.
+    # We craft 1/3 with both_in=True, so word_fidelity_gate is False.
+    verdicts_fail_word = [
         GenerationVerdict(
             target="t1", generated="g1", concept="plural",
             src_word="book", tgt_word="books",
@@ -184,21 +187,52 @@ def main() -> None:
         GenerationVerdict(
             target="t2", generated="g2", concept="plural",
             src_word="cat", tgt_word="cats",
-            cos_recovered=0.85, grammar_pass=True, grammar_n_errors=0,
+            cos_recovered=0.88, grammar_pass=True, grammar_n_errors=0,
             grammar_proxy=0.85,
             src_in_gen=True, tgt_in_gen=False, both_in_gen=False,
             exact_match=False, p_gen_mean=0.7,
         ),
+        GenerationVerdict(
+            target="t3", generated="g3", concept="plural",
+            src_word="dog", tgt_word="dogs",
+            cos_recovered=0.86, grammar_pass=True, grammar_n_errors=0,
+            grammar_proxy=0.85,
+            src_in_gen=False, tgt_in_gen=False, both_in_gen=False,
+            exact_match=False, p_gen_mean=0.7,
+        ),
     ]
-    gates = roll_up_gates(verdicts, cos_min=0.85, grammar_pass_rate=0.95,
-                         word_fidelity_min=0.70)
-    check("median_cos = 0.95 (middle of [0.85, 0.95])",
-          abs(gates.median_cos - 0.95) < 1e-6)
-    check("cos_gate True (median 0.95 ≥ 0.85)", gates.cos_gate)
-    check("grammar_gate True (2/2 ≥ ceil(0.95*2)=2)", gates.grammar_gate)
-    check("word_fidelity_gate False (1/2 < ceil(0.7*2)=1+1=...)",
-          not gates.word_fidelity_gate)
-    check("p_gen_overall computed", gates.p_gen_overall is not None)
+    gates_fail = roll_up_gates(
+        verdicts_fail_word, cos_min=0.85, grammar_pass_rate=0.95,
+        word_fidelity_min=0.70,
+    )
+    check("median_cos = 0.88 (middle of [0.86, 0.88, 0.95])",
+          abs(gates_fail.median_cos - 0.88) < 1e-6)
+    check("cos_gate True (median 0.88 ≥ 0.85)", gates_fail.cos_gate)
+    check("grammar_gate True (3/3 ≥ int(0.95*3)=2)", gates_fail.grammar_gate)
+    check("word_fidelity_gate False (1/3 < int(0.7*3)=2)",
+          not gates_fail.word_fidelity_gate)
+    check("all_pass False when word-fidelity fails", not gates_fail.all_pass)
+    check("p_gen_overall computed", gates_fail.p_gen_overall is not None)
+
+    # Now flip the third verdict to both_in=True so all 3 gates pass.
+    verdicts_pass = [
+        verdicts_fail_word[0],
+        verdicts_fail_word[1],
+        GenerationVerdict(
+            target="t3", generated="g3", concept="plural",
+            src_word="dog", tgt_word="dogs",
+            cos_recovered=0.86, grammar_pass=True, grammar_n_errors=0,
+            grammar_proxy=0.85,
+            src_in_gen=True, tgt_in_gen=True, both_in_gen=True,
+            exact_match=True, p_gen_mean=0.5,
+        ),
+    ]
+    gates_pass = roll_up_gates(
+        verdicts_pass, cos_min=0.85, grammar_pass_rate=0.95,
+        word_fidelity_min=0.70,
+    )
+    check("word_fidelity_gate True (2/3 ≥ int(0.7*3)=2)", gates_pass.word_fidelity_gate)
+    check("all_pass True when all gates met", gates_pass.all_pass)
 
     # =====================================================================
     # [7] read_corpus_tsv against 2a.1 output
