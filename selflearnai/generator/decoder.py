@@ -120,9 +120,15 @@ class PointerSeqCondDecoder(nn.Module):
         encoder_h: torch.Tensor,             # [B, T_in, D_enc]
         encoder_mask: torch.Tensor,          # [B, T_in], 1 for real tokens
         encoder_token_ids: torch.Tensor,     # [B, T_in], token ids of input
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return_ptr_attn: bool = False,
+    ) -> tuple[torch.Tensor, ...]:
         """Returns (final_log_probs [B, T_out, V], decoder_hidden
-        [B, T_out, h], p_gen [B, T_out, 1])."""
+        [B, T_out, h], p_gen [B, T_out, 1]).
+
+        If return_ptr_attn=True, also returns ptr_attn [B, T_out, T_in]
+        as a 4th tuple element. Used by training-time auxiliary losses
+        like subword_chain_loss (Phase 2b.1) that supervise the pointer
+        attention directly. Inference paths can leave it False."""
         B = encoder_h.size(0)
         memory = self.feat_dropout(self.cond_proj(encoder_h))    # [B, T_in, h]
         memory_pad_mask = (encoder_mask < 0.5)                   # True where padding
@@ -170,4 +176,6 @@ class PointerSeqCondDecoder(nn.Module):
         final_probs = p_gen * vocab_probs + (1.0 - p_gen) * copy_probs
         final_log_probs = torch.log(final_probs.clamp_min(1e-12))
 
+        if return_ptr_attn:
+            return final_log_probs, out_hidden, p_gen, ptr_attn
         return final_log_probs, out_hidden, p_gen

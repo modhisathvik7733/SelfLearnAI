@@ -99,6 +99,89 @@ def mixture_nll(
     )
 
 
+def is_continuation_token(
+    token_id: int, tokenizer,
+) -> bool:
+    """True if this token is a WordPiece continuation (starts with '##').
+
+    Continuation tokens (e.g., `##ier` of `prettier`, `##case` of
+    `bookcase`, `##bage` of `cabbage`) are the multi-subword failure
+    surface from Phase 2a's documented limitation (plan §19.14) +
+    Stage 3.1's furniture/vegetable failures. The subword_chain_loss
+    below uses this to identify positions that need explicit pointer-
+    attention supervision.
+    """
+    tok_str = tokenizer.convert_ids_to_tokens([int(token_id)])[0]
+    return tok_str.startswith("##")
+
+
+def build_continuation_mask(
+    target_ids: torch.Tensor,        # [B, T_out]
+    tokenizer,
+) -> torch.Tensor:
+    """Per-position bool mask: True at positions where the target
+    token is a WordPiece continuation (starts with '##').
+
+    Computed once per batch (not in the inner training loop) since
+    tokenizer.convert_ids_to_tokens is a Python call. Negligible cost.
+    """
+    B, T = target_ids.shape
+    flat_ids = target_ids.view(-1).tolist()
+    flat_mask = [is_continuation_token(tid, tokenizer) for tid in flat_ids]
+    return torch.tensor(flat_mask, dtype=torch.bool, device=target_ids.device).view(B, T)
+
+
+def subword_chain_loss(
+    ptr_attn: torch.Tensor,             # [B, T_out, T_in]  pointer attention probs
+    continuation_mask: torch.Tensor,    # [B, T_out]  bool — True at continuations
+) -> torch.Tensor:
+    """Auxiliary loss for the multi-subword fix (Phase 2b.1).
+
+    For autoencoder-shaped tasks (target sentence == encoder input),
+    the IDEAL pointer attention at output position N is one-hot at
+    encoder position N. This is true at every position, but the rest
+    of the loss (NLL on mixture, MSE on activations) already encourages
+    it implicitly.
+
+    What's NOT well-encouraged is per-position alignment specifically
+    at WordPiece continuation tokens (e.g., `##case` of `bookcase`,
+    `##ier` of `prettier`). These positions:
+      - Have rare vocabulary distributions (the ## tokens are heavily
+        position-dependent in real text)
+      - Get confused by the template-position majority pattern
+        ("position N is usually 'is'") during training
+      - Drop or mis-emit when the source word is multi-subword
+
+    Fix: explicitly supervise the pointer attention at continuation
+    positions to attend to the same position in the encoder input.
+    Computed as negative log-likelihood of `ptr_attn[b, n, n]` under
+    the constraint that target position n is a continuation token.
+
+    Loss is zero (gracefully) when no continuation positions exist
+    in the batch.
+    """
+    B, T_out, T_in = ptr_attn.shape
+    device = ptr_attn.device
+
+    # The "ideal target" is the diagonal: position N attends to position N.
+    # If T_out > T_in (rare in our autoencoder setup), positions beyond
+    # T_in have no valid target — mask them out.
+    target_indices = torch.arange(T_out, device=device).unsqueeze(0).expand(B, -1)  # [B, T_out]
+    in_bounds = target_indices < T_in
+    valid_mask = continuation_mask & in_bounds
+
+    if not valid_mask.any():
+        return torch.tensor(0.0, device=device)
+
+    # Clamp targets so gather doesn't go out of bounds (safe even if
+    # we then mask the result).
+    safe_targets = target_indices.clamp(max=T_in - 1).unsqueeze(-1)         # [B, T_out, 1]
+    log_attn = torch.log(ptr_attn.clamp_min(1e-12))                          # [B, T_out, T_in]
+    selected_log = torch.gather(log_attn, dim=-1, index=safe_targets).squeeze(-1)  # [B, T_out]
+    nll_per_pos = -selected_log * valid_mask.float()
+    return nll_per_pos.sum() / valid_mask.sum().clamp(min=1).float()
+
+
 def mse_activation_loss(
     decoder_hidden: torch.Tensor,           # [B, T_out, h]
     mse_proj: torch.nn.Module,              # decoder.mse_proj

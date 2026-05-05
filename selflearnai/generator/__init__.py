@@ -27,7 +27,12 @@ Public modules:
   - corpus:     read_corpus_tsv, CorpusEntry
 """
 from .decoder import PointerSeqCondDecoder
-from .loss import perturb_h, mixture_nll
+from .loss import (
+    perturb_h,
+    mixture_nll,
+    subword_chain_loss,
+    build_continuation_mask,
+)
 from .sample import decode_to_text, multi_candidate_sample
 from .eval import (
     word_pair_fidelity,
@@ -41,6 +46,8 @@ __all__ = [
     "PointerSeqCondDecoder",
     "perturb_h",
     "mixture_nll",
+    "subword_chain_loss",
+    "build_continuation_mask",
     "decode_to_text",
     "multi_candidate_sample",
     "word_pair_fidelity",
