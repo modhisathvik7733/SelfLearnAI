@@ -37,23 +37,25 @@ import torch.nn as nn
 class AdapterHead(nn.Module):
     """Small frozen-after-training transformation in encoder space.
 
-    Architecture:
-        Linear(D, hidden) → GELU → Linear(hidden, D) → LayerNorm
-    plus a residual connection (`output = z + net(z)`).
+    Architecture (LoRA-style zero-init residual):
+        z + LayerNorm( down( GELU( up(z) ) ) )
+    where `up: Linear(D, hidden)`, `down: Linear(hidden, D)` is
+    **zero-initialized** (both weight and bias). At random init the
+    residual branch outputs zero exactly, so an untrained AdapterHead
+    is the identity function. This is critical: inserting an
+    unregistered AdapterHead must never break an upstream operator
+    that was trained without it.
 
     Default `hidden_dim = D` (no compression). Parameter count is
     roughly 2·D² + 2·D for D-dim input and `hidden_dim = D`. For
     D=768 (GTE-base) ~1.2M params; for D=1024 (E5-large-v2) ~2.1M.
 
-    The residual is critical: at random initialization, `net(z) ≈ 0`
-    after LayerNorm, so an untrained adapter is approximately the
-    identity. This means inserting an unregistered AdapterHead never
-    breaks an upstream operator that was trained without it.
-
     Training (NOT in this file): a separate routine pulls contrastive
     pairs from the diagnostic test set (Task 0.5.4) or domain examples
-    and optimizes the adapter for the chosen task family. After
-    training, call `.freeze()` and register into `AdapterRegistry`.
+    and optimizes the adapter for the chosen task family. As `down`'s
+    weights move away from zero during training, the residual branch
+    becomes meaningful. After training, call `.freeze()` and register
+    into `AdapterRegistry`.
     """
 
     def __init__(
@@ -68,16 +70,21 @@ class AdapterHead(nn.Module):
         self.dim = dim
         self.family = family
         h = hidden_dim if hidden_dim is not None else dim
-        self.net = nn.Sequential(
-            nn.Linear(dim, h),
-            nn.GELU(),
-            nn.Linear(h, dim),
-            nn.LayerNorm(dim),
-        )
+
+        # Up-projection (and activation) keep their default init.
+        self.up = nn.Linear(dim, h)
+        self.act = nn.GELU()
+        # Down-projection is zero-initialized: both weight and bias.
+        # This makes the entire residual branch output 0 at init.
+        self.down = nn.Linear(h, dim)
+        nn.init.zeros_(self.down.weight)
+        nn.init.zeros_(self.down.bias)
+        # LayerNorm with default affine init (γ=1, β=0): LayerNorm(0) = 0.
+        self.norm = nn.LayerNorm(dim)
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
-        # Residual: untrained adapter ≈ identity.
-        return z + self.net(z)
+        # Residual: untrained adapter ≡ identity (down zero-init guarantees).
+        return z + self.norm(self.down(self.act(self.up(z))))
 
     def freeze(self) -> "AdapterHead":
         """Lock the adapter for inference. After freeze() the adapter
