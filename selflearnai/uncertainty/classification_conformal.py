@@ -140,11 +140,13 @@ def classification_coverage_curve(
     test_labels: np.ndarray | list[int],
     alphas: Iterable[float] = (0.05, 0.10, 0.15, 0.20, 0.25, 0.30),
 ) -> dict:
-    """Re-fit at multiple alpha levels and report empirical coverage at
-    each level + ECE = mean | empirical_coverage − (1 − α) | over alphas.
+    """Split-conformal coverage curve. Re-fits at multiple alpha levels
+    and reports ECE = mean | empirical − (1 − α) | over alphas.
 
-    Use as: split your eval data into a calibration half and a test half;
-    pass calibration as `train_probs/labels` and test as `test_probs/labels`.
+    Use when you have a clear calibration / test split with both halves
+    drawn from the same distribution. For small data with potentially
+    drifted train/test distributions, prefer
+    `loo_classification_coverage_curve` instead.
     """
     per_alpha = []
     for a in alphas:
@@ -164,4 +166,75 @@ def classification_coverage_curve(
         "alphas": list(alphas),
         "n_test": n_test,
         "ece_floor": (1.0 / n_test) if n_test else float("nan"),
+    }
+
+
+def loo_classification_coverage_curve(
+    probs: np.ndarray,
+    labels: np.ndarray | list[int],
+    alphas: Iterable[float] = (0.05, 0.10, 0.15, 0.20, 0.25, 0.30),
+) -> dict:
+    """Leave-one-out cross-conformal coverage curve.
+
+    For each row i in 1..n: calibrate on the other (n-1) rows, evaluate
+    on row i. Aggregate per-fold in_set flags into a single empirical
+    coverage figure per alpha.
+
+    Use when calibration and test should come from the SAME distribution
+    (the standard recipe under small-data + exchangeable assumption).
+    Each fold's calibration set has n-1 items; the n-th is the test
+    point. Coverage is the average over n one-row trials.
+
+    This is the right tool when:
+      - calibration data is scarce, AND
+      - splitting into separate calib/test halves either (a) leaves
+        too few items in either half, OR (b) breaks distribution match.
+    """
+    probs = np.asarray(probs, dtype=float)
+    labels = np.asarray(labels, dtype=int)
+    n = labels.shape[0]
+    if n < 3:
+        raise ValueError(f"Need >= 3 rows for LOO cross-conformal, got {n}")
+
+    per_alpha: list[dict] = []
+    for a in alphas:
+        in_set_flags: list[int] = []
+        set_sizes: list[int] = []
+        q_hats: list[float] = []
+        for i in range(n):
+            mask = np.ones(n, dtype=bool)
+            mask[i] = False
+            cal = ClassificationConformalCalibrator(alpha=a)
+            cal.fit(probs[mask], labels[mask])
+            ev = cal.evaluate(probs[i:i + 1], labels[i:i + 1])
+            in_set_flags.extend(ev["in_set_flags"])
+            set_sizes.extend(ev["set_sizes"])
+            if cal.q_hat is not None:
+                q_hats.append(cal.q_hat)
+        per_alpha.append({
+            "alpha": float(a),
+            "nominal_coverage": float(1.0 - a),
+            "empirical_coverage": float(np.mean(in_set_flags)) if in_set_flags else float("nan"),
+            "n_test": n,
+            "n_calib": n - 1,
+            "set_sizes": set_sizes,
+            "mean_set_size": float(np.mean(set_sizes)) if set_sizes else float("nan"),
+            "median_set_size": float(np.median(set_sizes)) if set_sizes else float("nan"),
+            "max_set_size": int(np.max(set_sizes)) if set_sizes else 0,
+            "n_empty_sets": int(sum(1 for s in set_sizes if s == 0)),
+            "median_q_hat": float(np.median(q_hats)) if q_hats else float("nan"),
+        })
+    ece = float(
+        np.mean([
+            abs(r["empirical_coverage"] - r["nominal_coverage"])
+            for r in per_alpha
+        ])
+    )
+    return {
+        "per_alpha": per_alpha,
+        "ece": ece,
+        "alphas": [float(a) for a in alphas],
+        "n_test": n,
+        "n_calib": n - 1,
+        "ece_floor": 1.0 / n if n else float("nan"),
     }

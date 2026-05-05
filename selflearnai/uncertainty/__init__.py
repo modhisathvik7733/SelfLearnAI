@@ -18,6 +18,7 @@ from .gates import ConformalGate, GateDecision, ThresholdGate, gate_from
 from .classification_conformal import (
     ClassificationConformalCalibrator,
     classification_coverage_curve,
+    loo_classification_coverage_curve,
 )
 
 __all__ = [
@@ -31,4 +32,5 @@ __all__ = [
     "gate_from",
     "ClassificationConformalCalibrator",
     "classification_coverage_curve",
+    "loo_classification_coverage_curve",
 ]
