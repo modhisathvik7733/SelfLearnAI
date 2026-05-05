@@ -51,20 +51,28 @@ def multi_candidate_sample(
     temperature: float = 1.0,
     seed: Optional[int] = None,
 ) -> tuple[list[str], torch.Tensor, list[list[str]], list[list[float]]]:
-    """K stochastic samples per item, pick the best by cos to psi_target.
+    """K candidates per item, pick the best by cos to psi_target.
 
-    Method: add Gumbel noise to the mixture log-probs at temperature
-    T → argmax → text. Repeat K times. For each item, return the
-    candidate whose re-encoded ψ has the highest cosine to psi_target.
+    K is composed of:
+      candidate 0:  GREEDY argmax decode (no noise) — guarantees that
+                    best-of-K ≥ greedy.
+      candidates 1..K-1:  Gumbel-perturbed samples at the given
+                          temperature for diversity.
+
+    Without including greedy, when the model's distribution is highly
+    peaked (typical after training collapses CE to ~0), all Gumbel
+    samples diverge from the mode and best-of-K can be WORSE than
+    greedy. Including greedy as candidate 0 fixes this — the reranker
+    picks greedy when no sampled candidate beats it.
 
     Plan §19.14 sub-task 2a.5 acceptance: median cos lift ≥ 0.02 with
-    K=5 vs K=1 on held-out. If lift < 0.005, the multi-candidate
-    machinery isn't pulling its weight.
+    K vs K=1 on held-out. With this fix, lift > 0 by construction;
+    real question is whether sampled candidates ever beat greedy.
 
     Returns:
       best_text:        [B] selected best candidate text per item
       best_cos:         [B] cosine of selected candidate to psi_target
-      all_candidates:   [B][K] all K texts per item
+      all_candidates:   [B][K] all K texts per item (index 0 = greedy)
       all_cos:          [B][K] all K cosines per item
     """
     if seed is not None:
@@ -77,9 +85,16 @@ def multi_candidate_sample(
     all_candidates: list[list[str]] = [[] for _ in range(B)]
     all_cos: list[list[float]] = [[] for _ in range(B)]
 
-    for _ in range(k):
-        # Gumbel-perturbed argmax: add noise drawn from Gumbel(0,1) and
-        # take argmax. Standard trick for sampling from log-probs.
+    # Candidate 0: GREEDY argmax (no noise, guarantees best-of-K ≥ greedy)
+    greedy_ids = log_probs.argmax(dim=-1)
+    for b in range(B):
+        text = tokenizer.decode(
+            greedy_ids[b].tolist(), skip_special_tokens=True,
+        )
+        all_candidates[b].append(text)
+
+    # Candidates 1..K-1: Gumbel-perturbed sampling for diversity
+    for _ in range(k - 1):
         gumbel = -torch.log(-torch.log(
             torch.rand_like(log_probs).clamp_min(1e-12),
         ).clamp_min(1e-12))
