@@ -1,22 +1,30 @@
 """Phase 2a quick probe — does the encoder admit continuous-vector inputs?
 
 The smallest, fastest empirical resolution of Approach A vs Approach B
-(plan §19.12). ~30 seconds of GPU time on a single A100.
+(plan §19.12). ~1 minute of GPU time on a single A100.
 
 Question: can we optimize a free continuous matrix X ∈ R^(T×D) so that
 encode(X) ≈ ψ_target, AND does snapping X to its nearest E5-vocab
 embeddings produce text that re-encodes back to ψ_target?
 
-  - If YES (loss → 0 AND cos(re-encoded, target) ≥ 0.85):
-        Approach A is viable. Continue Phase 2a with continuous-output
-        decoder + token snap.
-  - If NO (loss → 0 BUT cos low):
-        E5 finds adversarial continuous solutions that don't correspond
-        to any token sequence. Off-manifold confirmed. Commit to
-        Approach B (Gumbel-STE discrete diffusion).
-  - If loss DOESN'T converge:
-        Encoder gradients are unworkable for direct optimization.
-        Investigate before either approach.
+The probe runs in TWO snap modes:
+
+  RAW SNAP — independent per-position argmax over the full vocabulary.
+    Original probe behavior. Often picks subword BPE fragments that
+    don't form coherent text.
+
+  REFINED SNAP — start from raw snap restricted to complete words
+    (no ##-prefixed BPE pieces), then run coordinate-ascent
+    refinement: cycle through positions, try the top-K alternatives
+    at each, accept any swap that improves the full re-encoded
+    cos(encode(text), ψ_target). Discrete optimization; cos only
+    increases. Converges in 2–3 passes.
+
+The refined-snap result is the honest test of Approach A's ceiling.
+If even refined snap can't recover ψ AND produce grammatical text,
+Approach A is dead and we commit to B (Gumbel-STE discrete diffusion).
+
+Both modes are reported per-sentence and as medians.
 
 This probe bypasses tokenization by passing inputs_embeds directly to
 the BertModel-style forward (E5 is XLMRoberta-based, supports the same
@@ -25,11 +33,12 @@ output of the word-embedding lookup; the rest of the encoder
 processes it normally.
 
 5 target sentences are tested independently. Verdict is based on
-medians across the 5.
+medians across the 5 under the BETTER (refined) snap.
 
 Run:
   python scripts/stage2a_quick_probe.py
   python scripts/stage2a_quick_probe.py --device cuda --steps 2000
+  python scripts/stage2a_quick_probe.py --no-refine    # raw-only legacy
 """
 from __future__ import annotations
 
@@ -57,6 +66,97 @@ LOSS_OK = 1e-3
 COS_RECOVERED_OK = 0.85
 
 
+def build_complete_word_mask(tok) -> torch.Tensor:
+    """Return a [vocab_size] bool tensor: True for tokens that look like
+    complete words. Filters out ## BPE continuations + special tokens.
+
+    Heuristic: keep tokens whose decoded form starts with a non-#, has
+    length ≥ 2 (drops single-letter junk), and is alphanumeric or
+    contains common punctuation. Dropping these is what fixes the
+    'water catss covers thames pluraled' word-salad problem in the raw
+    snap.
+    """
+    vocab_size = len(tok)
+    mask = torch.zeros(vocab_size, dtype=torch.bool)
+    special_ids = set(tok.all_special_ids)
+    for i in range(vocab_size):
+        if i in special_ids:
+            continue
+        s = tok.convert_ids_to_tokens(i)
+        if not s or s.startswith("##"):
+            continue
+        if len(s) < 2:
+            continue
+        # Allow alphanumeric + apostrophe + dash. Excludes weird
+        # symbols that snuck into the snap last run (⁺, etc.)
+        if not all(c.isalnum() or c in "'-" for c in s):
+            continue
+        mask[i] = True
+    return mask
+
+
+def refine_tokens(
+    initial_tokens: list[int],
+    X_pos: torch.Tensor,            # [T, D] — the optimized per-position vectors
+    word_emb: torch.Tensor,         # [V, D]
+    *,
+    encode_fn,                      # callable: list[str] -> tensor [B, D]
+    psi_target: torch.Tensor,       # [D]
+    tokenizer,
+    vocab_mask: torch.Tensor,       # [V] bool — restrict candidates
+    top_k: int = 20,
+    max_iters: int = 5,
+) -> tuple[list[int], float, int]:
+    """Coordinate-ascent refinement over discrete tokens.
+
+    Cycle through positions. At each, get the top-K candidate tokens
+    (by cosine to that position's optimized vector, restricted by
+    vocab_mask). Try each candidate; keep the swap iff it improves
+    the full re-encoded cos(encode(text), psi_target).
+
+    Returns (refined_tokens, final_cos, iterations_used).
+    """
+    tokens = list(initial_tokens)
+
+    def cos_of_tokens(toks: list[int]) -> float:
+        text = tokenizer.decode(toks, skip_special_tokens=True)
+        if not text.strip():
+            return -1.0
+        psi = encode_fn([text])[0]
+        return float(F.cosine_similarity(psi, psi_target, dim=0).item())
+
+    # Restrict per-position similarity scores to the masked vocab.
+    we_n = F.normalize(word_emb, dim=-1)                # [V, D]
+    X_n = F.normalize(X_pos, dim=-1)                    # [T, D]
+    sims = X_n @ we_n.T                                  # [T, V]
+    masked_sims = sims.clone()
+    masked_sims[:, ~vocab_mask] = -1e9
+    top_k_per_pos = masked_sims.topk(top_k, dim=-1).indices.tolist()  # [T][K]
+
+    current_cos = cos_of_tokens(tokens)
+    iters_used = 0
+    for it in range(max_iters):
+        any_improvement = False
+        for pos in range(len(tokens)):
+            best_token = tokens[pos]
+            best_cos = current_cos
+            for cand in top_k_per_pos[pos]:
+                if cand == best_token:
+                    continue
+                tokens[pos] = cand
+                new_cos = cos_of_tokens(tokens)
+                if new_cos > best_cos + 1e-6:
+                    best_cos = new_cos
+                    best_token = cand
+                    any_improvement = True
+            tokens[pos] = best_token
+            current_cos = best_cos
+        iters_used = it + 1
+        if not any_improvement:
+            break
+    return tokens, current_cos, iters_used
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.strip().split("\n\n")[0])
     parser.add_argument("--encoder", default="intfloat/e5-large-v2")
@@ -67,6 +167,22 @@ def main() -> None:
                         help="Adam steps per target sentence.")
     parser.add_argument("--lr", type=float, default=1e-2)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--refine", dest="refine", action="store_true", default=True,
+        help="Run coordinate-ascent refinement after raw snap (default).",
+    )
+    parser.add_argument(
+        "--no-refine", dest="refine", action="store_false",
+        help="Skip refinement (legacy raw-snap-only mode).",
+    )
+    parser.add_argument(
+        "--refine-top-k", type=int, default=20,
+        help="Per-position candidate count during refinement.",
+    )
+    parser.add_argument(
+        "--refine-max-iters", type=int, default=5,
+        help="Max coordinate-ascent passes (early-stops on convergence).",
+    )
     parser.add_argument("--out", default="results/stage2a/quick_probe.json")
     args = parser.parse_args()
 
@@ -148,6 +264,15 @@ def main() -> None:
 
     # ---- [1] Per-sentence probe ---------------------------------------
     torch.manual_seed(args.seed)
+
+    # Build the complete-word vocabulary mask once. Used during
+    # refinement to filter out ## BPE pieces and weird symbols.
+    print("\nBuilding complete-word vocabulary mask ...")
+    complete_mask = build_complete_word_mask(tok).to(args.device)
+    n_kept = int(complete_mask.sum().item())
+    print(f"  vocab kept under complete-word filter: "
+          f"{n_kept}/{complete_mask.numel()}")
+
     results: list[dict] = []
     print("\n[1] Per-sentence probe")
     print("-" * 70)
@@ -167,46 +292,89 @@ def main() -> None:
             opt.step()
         final_loss = float(loss.item())
 
-        # Snap each row of X to nearest vocab token by cosine.
+        # ---- RAW SNAP: independent argmax over full vocabulary -------
         with torch.no_grad():
             X_n = F.normalize(X[0], dim=-1)                    # [T, D]
             we_n = F.normalize(word_emb, dim=-1)               # [V, D]
             sims = X_n @ we_n.T                                # [T, V]
-            tokens = sims.argmax(dim=-1).tolist()
-        snapped_text = tok.decode(tokens, skip_special_tokens=True)
-
-        # Re-encode the snapped text and compare to target.
-        psi_recovered = encode_text([snapped_text])[0]
-        cos_recovered = float(F.cosine_similarity(
-            psi_recovered, psi_target, dim=0,
+            raw_tokens = sims.argmax(dim=-1).tolist()
+        raw_text = tok.decode(raw_tokens, skip_special_tokens=True)
+        psi_recovered_raw = encode_text([raw_text])[0]
+        cos_raw = float(F.cosine_similarity(
+            psi_recovered_raw, psi_target, dim=0,
         ).item())
 
-        # Sanity: cos at the optimization endpoint (BEFORE snap), should be very high.
+        # Sanity: cos at the optimization endpoint (BEFORE snap).
         with torch.no_grad():
             psi_pred_final = encode_continuous(X)[0]
             cos_pre_snap = float(F.cosine_similarity(
                 psi_pred_final, psi_target, dim=0,
             ).item())
 
+        # ---- REFINED SNAP (default): start from complete-word argmax,
+        # then coordinate-ascent over discrete tokens. Cos can ONLY
+        # increase from the starting point.
+        if args.refine:
+            with torch.no_grad():
+                masked_sims = sims.clone()
+                masked_sims[:, ~complete_mask] = -1e9
+                init_tokens_refined = masked_sims.argmax(dim=-1).tolist()
+            ref_tokens, cos_refined, ref_iters = refine_tokens(
+                init_tokens_refined,
+                X[0].detach(),
+                word_emb,
+                encode_fn=encode_text,
+                psi_target=psi_target,
+                tokenizer=tok,
+                vocab_mask=complete_mask,
+                top_k=args.refine_top_k,
+                max_iters=args.refine_max_iters,
+            )
+            ref_text = tok.decode(ref_tokens, skip_special_tokens=True)
+        else:
+            ref_tokens = raw_tokens
+            ref_text = raw_text
+            cos_refined = cos_raw
+            ref_iters = 0
+
+        # Headline cos for verdict purposes is the BETTER (refined)
+        # score — we want to know Approach A's CEILING, not its floor.
+        cos_recovered = cos_refined
+
         record = {
             "target": sent,
             "final_loss": final_loss,
             "cos_pre_snap": cos_pre_snap,
-            "snapped_text": snapped_text,
-            "snapped_token_ids": tokens,
+            "raw_snap": {
+                "text": raw_text,
+                "token_ids": raw_tokens,
+                "cos_recovered": cos_raw,
+            },
+            "refined_snap": {
+                "text": ref_text,
+                "token_ids": ref_tokens,
+                "cos_recovered": cos_refined,
+                "iterations": ref_iters,
+            },
             "cos_recovered_after_snap": cos_recovered,
         }
         results.append(record)
 
         loss_mark = "✓" if final_loss < LOSS_OK else "✗"
-        cos_mark = "✓" if cos_recovered >= COS_RECOVERED_OK else "✗"
+        cos_mark_raw = "✓" if cos_raw >= COS_RECOVERED_OK else "✗"
+        cos_mark_ref = "✓" if cos_refined >= COS_RECOVERED_OK else "✗"
         print(f"\n  [{i+1}/{len(TARGET_SENTENCES)}] target: {sent!r}")
         print(f"    {loss_mark} final loss:        {final_loss:.6f} "
               f"(threshold < {LOSS_OK})")
         print(f"      cos(pre-snap, target):  {cos_pre_snap:.4f}")
-        print(f"      snapped text:           {snapped_text!r}")
-        print(f"    {cos_mark} cos(re-encoded, target):  {cos_recovered:.4f} "
-              f"(threshold ≥ {COS_RECOVERED_OK})")
+        print(f"      RAW snap:               {raw_text!r}")
+        print(f"    {cos_mark_raw} cos(re-encoded raw, target):     "
+              f"{cos_raw:.4f} (threshold ≥ {COS_RECOVERED_OK})")
+        if args.refine:
+            print(f"      REFINED snap ({ref_iters} iters): {ref_text!r}")
+            print(f"    {cos_mark_ref} cos(re-encoded refined, target): "
+                  f"{cos_refined:.4f} (threshold ≥ {COS_RECOVERED_OK})  "
+                  f"Δ over raw: {cos_refined - cos_raw:+.4f}")
 
     # ---- Verdict -----------------------------------------------------
     print("\n" + "=" * 70)
