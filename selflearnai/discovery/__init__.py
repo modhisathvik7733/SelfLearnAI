@@ -49,6 +49,16 @@ from .validate import (
     make_identity_candidate,
     validate_candidate,
 )
+from .refactor import (
+    MacroCandidate,
+    MacroPromotionResult,
+    enumerate_subsequences,
+    evaluate_macro_utility,
+    macro_name_from_chain,
+    make_macro_op,
+    mine_subchain_candidates,
+    promote_macros,
+)
 
 __all__ = [
     "WakeBuffer",
@@ -68,4 +78,12 @@ __all__ = [
     "ValidationResult",
     "make_identity_candidate",
     "validate_candidate",
+    "MacroCandidate",
+    "MacroPromotionResult",
+    "enumerate_subsequences",
+    "evaluate_macro_utility",
+    "macro_name_from_chain",
+    "make_macro_op",
+    "mine_subchain_candidates",
+    "promote_macros",
 ]
