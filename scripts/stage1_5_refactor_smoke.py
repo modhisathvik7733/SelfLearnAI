@@ -9,12 +9,28 @@ Validates the two-gate macro promotion pipeline end-to-end. Two parts:
     everything else.
 
   PART B — UTILITY GATE (real operators + held-out tasks)
-    Trains real `agentive` and `plural` operators on the existing
-    repo data, builds the macro `(agentive, plural)`, and runs the
-    utility evaluator on held-out (verb → plural_agent) tasks
-    (drawn from the existing CHAIN_TRIPLES fixture). The macro
-    must measurably improve the planner at depth=1 (the canonical
-    macro use-case: depth-2 problem becomes depth-1 problem).
+    Trains 4 real operators (agentive, plural, past_tense, opposite),
+    runs the utility evaluator on held-out (verb → plural_agent)
+    tasks (drawn from CHAIN_TRIPLES) at depth=1 against TWO macros:
+
+      - USEFUL macro = (agentive, plural)
+        Baseline library = {past_tense, opposite} (does NOT contain
+        the macro's component ops). Macro adds genuine new capability —
+        baseline cannot reach plural_agent without it. Expected PASS.
+
+      - USELESS macro = (past_tense, opposite)
+        Same baseline = {past_tense, opposite}. Both components are
+        already in the baseline; the macro chains them in a direction
+        irrelevant to verb→plural_agent. Augmented planner gains no
+        useful path. Expected FAIL utility.
+
+    Note on the original draft (failed first run): putting `agentive`
+    and `plural` BOTH in the baseline let the planner reach cos≈0.896
+    at depth=1 with `agentive` alone (painter ≈ painters in E5), so
+    the macro's marginal contribution was only +0.003. The fix is
+    structural: baseline must NOT contain the macro's components for
+    the gate to measure the macro's real value. Same pattern as
+    Task 1.5.3 (where "baseline excludes plural" was correct).
 
 Acceptance gates (Task 1.5.4, all HARD):
 
@@ -26,10 +42,12 @@ Acceptance gates (Task 1.5.4, all HARD):
     - mine does NOT return ('plural', 'opposite') — appears once
       (sub-prefix of one chain), below frequency_min.
 
-  Part B:
-    - Real (agentive, plural) macro at depth=1 has
-      mean(aug_cos - base_cos) ≥ 0.01 across held-out tasks AND
-      ≥ 1 task individually improves by ≥ 0.01.
+  Part B (two sub-tests):
+    - Useful (agentive, plural) macro at depth=1: mean improvement
+      ≥ 0.01 AND ≥ 1 task individually improves by ≥ 0.01.  PASS.
+    - Useless (past_tense, opposite) macro at depth=1: rejected
+      (improvement < 0.01 or no individual tasks improve).
+      Validates the gate fires in BOTH directions.
 
 Run on the GPU box (~3–5 min: encoder + 2 ops trained):
   python scripts/stage1_5_refactor_smoke.py
@@ -197,27 +215,42 @@ def part_a_frequency_gate(args) -> tuple[bool, dict]:
 
 def part_b_utility_gate(args, encode, enc_cfg) -> tuple[bool, dict]:
     print("\n" + "=" * 78)
-    print("PART B — UTILITY GATE (real (agentive, plural) macro)")
+    print("PART B — UTILITY GATE (useful vs useless macro)")
     print("=" * 78)
 
-    print(f"  Training real `agentive` and `plural` operators "
-          f"@ {args.candidate_epochs} epochs each ...")
-    plural_pairs = read_pairs(Path("data/plurality") / "text_pairs_train.tsv")
-    agentive_pairs = read_pairs(Path("data/few_shot/agentive") / "text_pairs_train.tsv")
-    op_plural = train_operator(
-        encode, plural_pairs,
-        dim=enc_cfg["dim"], device=args.device,
-        seed=args.seed, epochs=args.candidate_epochs,
-    )
-    op_agentive = train_operator(
-        encode, agentive_pairs,
-        dim=enc_cfg["dim"], device=args.device,
-        seed=args.seed, epochs=args.candidate_epochs,
-    )
-    operators = {"plural": op_plural, "agentive": op_agentive}
+    # Train all 4 operators we'll need. The baseline library will use
+    # only past_tense + opposite; the macros are built from the full set.
+    print(f"  Training 4 base operators @ {args.candidate_epochs} epochs each ...")
+    train_specs = [
+        ("agentive",   "data/few_shot/agentive"),
+        ("plural",     "data/plurality"),
+        ("past_tense", "data/past_tense"),
+        ("opposite",   "data/opposite_v2"),
+    ]
+    all_ops: dict[str, object] = {}
+    for name, ddir in train_specs:
+        pairs = read_pairs(Path(ddir) / "text_pairs_train.tsv")
+        op = train_operator(
+            encode, pairs,
+            dim=enc_cfg["dim"], device=args.device,
+            seed=args.seed, epochs=args.candidate_epochs,
+        )
+        all_ops[name] = op
+        print(f"    trained {name} ({len(pairs)} pairs)")
+
+    # Baseline library: ops NOT in the useful macro's chain.
+    baseline_operators = {
+        "past_tense": all_ops["past_tense"],
+        "opposite":   all_ops["opposite"],
+    }
+    print(f"  Baseline library: {sorted(baseline_operators.keys())} "
+          f"(deliberately EXCLUDES agentive + plural so the useful "
+          f"macro provides new capability)")
 
     # Held-out tasks: from CHAIN_TRIPLES, encode (verb → plural_agent).
-    # Each is a depth-2 problem (agentive then plural).
+    # Each is a depth-2 problem (agentive then plural) under the FULL
+    # operator set; the baseline (past_tense + opposite) cannot reach
+    # plural_agent at any depth using only those ops.
     print(f"  Held-out tasks: {len(CHAIN_TRIPLES)} (verb → plural_agent) pairs")
     holdout_tasks: list[tuple] = []
     for verb, _, plural_agent in CHAIN_TRIPLES:
@@ -225,54 +258,95 @@ def part_b_utility_gate(args, encode, enc_cfg) -> tuple[bool, dict]:
         z_goal = encode([plural_agent]).squeeze(0)
         holdout_tasks.append((z_start, z_goal))
 
-    # Build the candidate manually (we'd normally come from mining).
     from selflearnai.discovery import MacroCandidate
-    candidate = MacroCandidate(
-        chain=("agentive", "plural"),
-        n_occurrences=6,                # already passed frequency gate
-        sources_seen=[v for v, _, _ in CHAIN_TRIPLES],
-    )
-    macro_op = make_macro_op(candidate.chain, operators)
-    macro_name = macro_name_from_chain(candidate.chain)
-    print(f"  macro built: {macro_name} (chain length {len(candidate.chain)})")
 
-    print(f"  Evaluating utility at macro_depth={args.macro_depth} ...")
-    result = evaluate_macro_utility(
-        candidate, macro_op,
-        operators=operators,
-        holdout_tasks=holdout_tasks,
-        macro_depth=args.macro_depth,
-        cos_improvement_min=args.cos_improvement_min,
-        per_task_improvement_min=args.per_task_improvement_min,
-        n_tasks_improved_min=args.n_tasks_improved_min,
-        beam_width=args.beam_width,
-    )
-    print(
-        f"  baseline_cos={result.planner_baseline_cos_mean:.3f}  "
-        f"aug_cos={result.planner_augmented_cos_mean:.3f}  "
-        f"Δ={result.planner_cos_improvement_mean:+.4f}"
-    )
-    print(
-        f"  tasks_improved={result.n_tasks_improved}/{result.n_planner_tasks} "
-        f"(threshold ≥ {result.per_task_improvement_threshold:+.4f}, "
-        f"≥{result.n_tasks_improved_min} task)"
-    )
-    if result.failing_reasons:
-        for f in result.failing_reasons:
-            print(f"    · {f}")
-    part_b_pass = result.passes_utility
-    print(f"\n  → utility gate: {'PASS' if part_b_pass else 'FAIL'}")
+    test_cases = [
+        {
+            "name":       "useful_macro",
+            "chain":      ("agentive", "plural"),
+            "expected":   "PASS",
+            "rationale":  "components NOT in baseline → adds capability",
+        },
+        {
+            "name":       "useless_macro",
+            "chain":      ("past_tense", "opposite"),
+            "expected":   "FAIL",
+            "rationale":  "components ARE in baseline; chain irrelevant to task",
+        },
+    ]
+
+    sub_records: dict[str, dict] = {}
+    for case in test_cases:
+        macro_chain = case["chain"]
+        # Use ALL trained ops (including agentive/plural even when they're
+        # not in baseline) to BUILD the macro's callable. The macro is a
+        # single composed op — it doesn't care that the planner's library
+        # excludes its components.
+        macro_op = make_macro_op(macro_chain, all_ops)
+        macro_name = macro_name_from_chain(macro_chain)
+        candidate = MacroCandidate(
+            chain=macro_chain, n_occurrences=6,
+            sources_seen=[v for v, _, _ in CHAIN_TRIPLES],
+        )
+        print(f"\n— Sub-case: {case['name']}  "
+              f"(macro={macro_chain}, expected: {case['expected']})")
+        print(f"   {case['rationale']}")
+        result = evaluate_macro_utility(
+            candidate, macro_op,
+            operators=baseline_operators,
+            holdout_tasks=holdout_tasks,
+            macro_depth=args.macro_depth,
+            cos_improvement_min=args.cos_improvement_min,
+            per_task_improvement_min=args.per_task_improvement_min,
+            n_tasks_improved_min=args.n_tasks_improved_min,
+            beam_width=args.beam_width,
+        )
+        verdict = "PASS" if result.passes_utility else "FAIL"
+        mark = "✓" if (
+            (case["expected"] == "PASS" and result.passes_utility)
+            or (case["expected"] == "FAIL" and not result.passes_utility)
+        ) else "✗"
+        print(
+            f"   {mark} baseline_cos={result.planner_baseline_cos_mean:.3f}  "
+            f"aug_cos={result.planner_augmented_cos_mean:.3f}  "
+            f"Δ={result.planner_cos_improvement_mean:+.4f}  "
+            f"tasks_improved={result.n_tasks_improved}/{result.n_planner_tasks}  "
+            f"→ utility {verdict}"
+        )
+        if result.failing_reasons:
+            for f in result.failing_reasons:
+                print(f"     · {f}")
+        sub_records[case["name"]] = {
+            "macro_name": macro_name,
+            "chain": list(macro_chain),
+            "expected": case["expected"],
+            "verdict": verdict,
+            "planner_baseline_cos_mean": result.planner_baseline_cos_mean,
+            "planner_augmented_cos_mean": result.planner_augmented_cos_mean,
+            "planner_cos_improvement_mean": result.planner_cos_improvement_mean,
+            "n_tasks_improved": result.n_tasks_improved,
+            "n_planner_tasks": result.n_planner_tasks,
+            "passes_utility": result.passes_utility,
+            "failing_reasons": result.failing_reasons,
+        }
+
+    # Acceptance: useful_macro must PASS, useless_macro must FAIL.
+    useful_pass = sub_records["useful_macro"]["passes_utility"]
+    useless_fail = not sub_records["useless_macro"]["passes_utility"]
+    part_b_pass = useful_pass and useless_fail
+
+    print()
+    print(f"  useful macro passes utility:    "
+          f"{'PASS' if useful_pass else 'FAIL'}")
+    print(f"  useless macro rejected:         "
+          f"{'PASS' if useless_fail else 'FAIL'}")
+    print(f"  → Part B overall: {'PASS' if part_b_pass else 'FAIL'}")
 
     return part_b_pass, {
-        "macro_name": macro_name,
-        "chain": list(candidate.chain),
-        "n_planner_tasks": result.n_planner_tasks,
-        "planner_baseline_cos_mean": result.planner_baseline_cos_mean,
-        "planner_augmented_cos_mean": result.planner_augmented_cos_mean,
-        "planner_cos_improvement_mean": result.planner_cos_improvement_mean,
-        "n_tasks_improved": result.n_tasks_improved,
-        "passes_utility": result.passes_utility,
-        "failing_reasons": result.failing_reasons,
+        "baseline_library": sorted(baseline_operators.keys()),
+        "sub_cases": sub_records,
+        "useful_pass": useful_pass,
+        "useless_fail": useless_fail,
         "pass": part_b_pass,
     }
 
