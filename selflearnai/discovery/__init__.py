@@ -64,6 +64,13 @@ from .registry import (
     ConceptRegistry,
     ConceptVersion,
 )
+from .sleep import (
+    ClusterAuditRow,
+    MacroAuditRow,
+    SleepConfig,
+    SleepCycleResult,
+    run_sleep_cycle,
+)
 
 __all__ = [
     "WakeBuffer",
@@ -94,4 +101,9 @@ __all__ = [
     "ConceptEntry",
     "ConceptRegistry",
     "ConceptVersion",
+    "ClusterAuditRow",
+    "MacroAuditRow",
+    "SleepConfig",
+    "SleepCycleResult",
+    "run_sleep_cycle",
 ]
