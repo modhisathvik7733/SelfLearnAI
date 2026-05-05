@@ -178,6 +178,57 @@ class BeamSearchPlanner:
         return ranked[: self.top_k_operators]
 
     @torch.no_grad()
+    def execute_hint(
+        self,
+        psi_start: torch.Tensor,
+        psi_goal: torch.Tensor,
+        chain_hint: list[str] | tuple[str, ...],
+    ) -> PlanState:
+        """Execute a specified operator chain (no search).
+
+        Use this when an upstream module — typically the intent
+        classifier (Task 1.4) — has already determined which operators
+        should be applied and in what order. The planner's role is then
+        to *execute* the chain and produce a verifiable end state, not
+        to search.
+
+        This is the correct integration point for the production flow:
+            user question
+              → intent module → (chain, source)
+              → planner.execute_hint(start, goal, chain)
+              → end-state ψ + verification trace.
+
+        Returns a `PlanState` with `chain == tuple(chain_hint)` and the
+        final embedding after running every operator in order. Score
+        and cos_to_goal computed against `psi_goal`.
+        """
+        psi_start = psi_start.detach().flatten()
+        psi_goal = psi_goal.detach().flatten()
+        if psi_start.shape != psi_goal.shape:
+            raise ValueError(
+                f"psi_start shape {psi_start.shape} != psi_goal shape {psi_goal.shape}"
+            )
+        for op_name in chain_hint:
+            if op_name not in self.operators:
+                raise ValueError(
+                    f"chain_hint references unknown operator {op_name!r}; "
+                    f"library has {sorted(self.operators.keys())}"
+                )
+
+        psi = psi_start
+        for op_name in chain_hint:
+            psi = self.operators[op_name](psi.unsqueeze(0)).squeeze(0)
+        depth = len(chain_hint)
+        score, cos = self._score(psi, psi_goal, depth=depth)
+        return PlanState(
+            psi=psi,
+            chain=tuple(chain_hint),
+            score=score,
+            cos_to_goal=cos,
+            depth=depth,
+        )
+
+    @torch.no_grad()
     def search(
         self,
         psi_start: torch.Tensor,
