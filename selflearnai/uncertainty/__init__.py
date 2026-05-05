@@ -15,6 +15,10 @@ Task 0.5.3).
 from .conformal import ConformalOperatorCalibrator, coverage_curve
 from .compositional import BonferroniChainCalibrator, compose_operators
 from .gates import ConformalGate, GateDecision, ThresholdGate, gate_from
+from .classification_conformal import (
+    ClassificationConformalCalibrator,
+    classification_coverage_curve,
+)
 
 __all__ = [
     "ConformalOperatorCalibrator",
@@ -25,4 +29,6 @@ __all__ = [
     "GateDecision",
     "ThresholdGate",
     "gate_from",
+    "ClassificationConformalCalibrator",
+    "classification_coverage_curve",
 ]
