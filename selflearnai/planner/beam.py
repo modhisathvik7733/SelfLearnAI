@@ -48,12 +48,18 @@ class PlanState:
     Attributes:
         psi: current embedding, shape (D,).
         chain: tuple of operator names applied so far, in order.
-        score: cos(psi, psi_goal) at the current state. Higher = better.
+        score: heuristic score used for beam ordering. Higher = better.
+            With step_bonus > 0 this is `cos_to_goal + step_bonus * depth`;
+            with step_bonus = 0 it equals `cos_to_goal`.
+        cos_to_goal: raw cosine similarity to goal at this state.
+            Surfaced separately so reports / diagnostics can show the
+            unmodified geometric distance independent of the heuristic.
         depth: length of `chain`. depth == 0 ⇒ chain == ().
     """
     psi: torch.Tensor
     chain: tuple[str, ...]
     score: float
+    cos_to_goal: float
     depth: int
 
     @property
@@ -89,16 +95,49 @@ class BeamSearchPlanner:
         operators: dict[str, Operator],
         beam_width: int = 4,
         max_depth: int = 5,
+        step_bonus: float = 0.0,
     ):
+        """
+        Args:
+            operators: name → callable operator dict.
+            beam_width: top-K states to keep at each depth.
+            max_depth: max chain length to explore (0 = no-op only).
+            step_bonus: tie-break / heuristic bonus added to the cos
+                score per operator applied. With step_bonus = 0 the
+                planner is pure cos-to-goal (the Task 1.6 baseline).
+                With small positive step_bonus (~0.01-0.02) the planner
+                prefers multi-step chains that produce nearly-tied
+                cos scores — the standard "informative-when-cos-margin
+                -is-tiny" tie-breaker, validated on the agentive ∘
+                plural test in Task 1.7.
+        """
         if not operators:
             raise ValueError("Need at least one operator in the library.")
         if beam_width < 1:
             raise ValueError(f"beam_width must be >= 1, got {beam_width}")
         if max_depth < 0:
             raise ValueError(f"max_depth must be >= 0, got {max_depth}")
+        if step_bonus < 0:
+            raise ValueError(f"step_bonus must be >= 0, got {step_bonus}")
         self.operators: dict[str, Operator] = dict(operators)
         self.beam_width: int = beam_width
         self.max_depth: int = max_depth
+        self.step_bonus: float = step_bonus
+
+    def _score(self, psi: torch.Tensor, psi_goal: torch.Tensor, depth: int) -> tuple[float, float]:
+        """Compute (combined_score, cos_to_goal) for a state.
+
+        combined_score = cos_to_goal + step_bonus * depth — the value
+        used for beam ordering. cos_to_goal is the raw geometric
+        similarity, surfaced for reporting.
+        """
+        cos = float(
+            F.cosine_similarity(
+                psi.unsqueeze(0), psi_goal.unsqueeze(0), dim=-1
+            ).item()
+        )
+        score = cos + self.step_bonus * depth
+        return score, cos
 
     @torch.no_grad()
     def search(
@@ -106,7 +145,8 @@ class BeamSearchPlanner:
         psi_start: torch.Tensor,
         psi_goal: torch.Tensor,
     ) -> PlanState:
-        """Find the highest-cos operator chain from psi_start to psi_goal.
+        """Find the highest-scoring operator chain from psi_start to
+        psi_goal under the planner's score function.
 
         Returns the best PlanState seen across all depths from 0 to
         max_depth (inclusive). Including the depth-0 baseline means a
@@ -119,17 +159,12 @@ class BeamSearchPlanner:
                 f"psi_start shape {psi_start.shape} != psi_goal shape {psi_goal.shape}"
             )
 
-        def _score(psi: torch.Tensor) -> float:
-            return float(
-                F.cosine_similarity(
-                    psi.unsqueeze(0), psi_goal.unsqueeze(0), dim=-1
-                ).item()
-            )
-
+        score0, cos0 = self._score(psi_start, psi_goal, depth=0)
         initial = PlanState(
             psi=psi_start,
             chain=(),
-            score=_score(psi_start),
+            score=score0,
+            cos_to_goal=cos0,
             depth=0,
         )
         best = initial
@@ -145,10 +180,12 @@ class BeamSearchPlanner:
             for state in beam:
                 for op_name, op in self.operators.items():
                     next_psi = op(state.psi.unsqueeze(0)).squeeze(0)
+                    score, cos = self._score(next_psi, psi_goal, depth=d)
                     new_state = PlanState(
                         psi=next_psi,
                         chain=state.chain + (op_name,),
-                        score=_score(next_psi),
+                        score=score,
+                        cos_to_goal=cos,
                         depth=d,
                     )
                     candidates.append(new_state)
@@ -171,7 +208,7 @@ class BeamSearchPlanner:
         k: int = 5,
     ) -> list[PlanState]:
         """Return the top-K PlanStates encountered during search,
-        sorted by score (highest first).
+        sorted by combined score (highest first).
 
         Useful for diagnosing why the best chain was chosen — inspect
         the runner-up chains to see whether the planner is making a
@@ -184,15 +221,9 @@ class BeamSearchPlanner:
                 f"psi_start shape {psi_start.shape} != psi_goal shape {psi_goal.shape}"
             )
 
-        def _score(psi: torch.Tensor) -> float:
-            return float(
-                F.cosine_similarity(
-                    psi.unsqueeze(0), psi_goal.unsqueeze(0), dim=-1
-                ).item()
-            )
-
+        score0, cos0 = self._score(psi_start, psi_goal, depth=0)
         initial = PlanState(
-            psi=psi_start, chain=(), score=_score(psi_start), depth=0,
+            psi=psi_start, chain=(), score=score0, cos_to_goal=cos0, depth=0,
         )
         all_seen: list[PlanState] = [initial]
         beam: list[PlanState] = [initial]
@@ -202,10 +233,12 @@ class BeamSearchPlanner:
             for state in beam:
                 for op_name, op in self.operators.items():
                     next_psi = op(state.psi.unsqueeze(0)).squeeze(0)
+                    score, cos = self._score(next_psi, psi_goal, depth=d)
                     new_state = PlanState(
                         psi=next_psi,
                         chain=state.chain + (op_name,),
-                        score=_score(next_psi),
+                        score=score,
+                        cos_to_goal=cos,
                         depth=d,
                     )
                     candidates.append(new_state)
