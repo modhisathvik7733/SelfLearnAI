@@ -14,10 +14,15 @@ Task 0.5.3).
 """
 from .conformal import ConformalOperatorCalibrator, coverage_curve
 from .compositional import BonferroniChainCalibrator, compose_operators
+from .gates import ConformalGate, GateDecision, ThresholdGate, gate_from
 
 __all__ = [
     "ConformalOperatorCalibrator",
     "coverage_curve",
     "BonferroniChainCalibrator",
     "compose_operators",
+    "ConformalGate",
+    "GateDecision",
+    "ThresholdGate",
+    "gate_from",
 ]
