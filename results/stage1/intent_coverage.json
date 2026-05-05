@@ -1,0 +1,317 @@
+{
+  "task": "1.3",
+  "n_patterns": 17,
+  "concepts": [
+    "agentive",
+    "comparative",
+    "opposite",
+    "past_tense",
+    "plural",
+    "superlative",
+    "young"
+  ],
+  "results": [
+    {
+      "label": "canonical",
+      "path": "data/intent_eval/canonical.tsv",
+      "n_rows": 31,
+      "counters": {
+        "parseable_total": 25,
+        "parseable_correct": 25,
+        "parseable_wrong": 0,
+        "parseable_missed": 0,
+        "refuse_total": 6,
+        "refuse_correct": 6,
+        "refuse_violated": 0
+      },
+      "per_concept": {
+        "plural": {
+          "total": 4,
+          "correct": 4,
+          "wrong": 0,
+          "missed": 0
+        },
+        "past_tense": {
+          "total": 4,
+          "correct": 4,
+          "wrong": 0,
+          "missed": 0
+        },
+        "comparative": {
+          "total": 3,
+          "correct": 3,
+          "wrong": 0,
+          "missed": 0
+        },
+        "superlative": {
+          "total": 3,
+          "correct": 3,
+          "wrong": 0,
+          "missed": 0
+        },
+        "opposite": {
+          "total": 3,
+          "correct": 3,
+          "wrong": 0,
+          "missed": 0
+        },
+        "agentive": {
+          "total": 4,
+          "correct": 4,
+          "wrong": 0,
+          "missed": 0
+        },
+        "young": {
+          "total": 4,
+          "correct": 4,
+          "wrong": 0,
+          "missed": 0
+        }
+      },
+      "parseable_acc": 1.0,
+      "refuse_acc": 1.0,
+      "gate": {
+        "parseable_min": 1.0,
+        "refuse_min": 1.0,
+        "hard": true
+      },
+      "is_hard_gate": true,
+      "parseable_meets": true,
+      "refuse_meets": true,
+      "parseable_pass": true,
+      "refuse_pass": true,
+      "pass": true
+    },
+    {
+      "label": "paraphrase",
+      "path": "data/intent_eval/paraphrase.tsv",
+      "n_rows": 35,
+      "counters": {
+        "parseable_total": 35,
+        "parseable_correct": 13,
+        "parseable_wrong": 0,
+        "parseable_missed": 22,
+        "refuse_total": 0,
+        "refuse_correct": 0,
+        "refuse_violated": 0
+      },
+      "per_concept": {
+        "plural": {
+          "total": 5,
+          "correct": 3,
+          "wrong": 0,
+          "missed": 2
+        },
+        "past_tense": {
+          "total": 5,
+          "correct": 1,
+          "wrong": 0,
+          "missed": 4
+        },
+        "comparative": {
+          "total": 5,
+          "correct": 1,
+          "wrong": 0,
+          "missed": 4
+        },
+        "superlative": {
+          "total": 5,
+          "correct": 1,
+          "wrong": 0,
+          "missed": 4
+        },
+        "opposite": {
+          "total": 5,
+          "correct": 3,
+          "wrong": 0,
+          "missed": 2
+        },
+        "agentive": {
+          "total": 5,
+          "correct": 2,
+          "wrong": 0,
+          "missed": 3
+        },
+        "young": {
+          "total": 5,
+          "correct": 2,
+          "wrong": 0,
+          "missed": 3
+        }
+      },
+      "parseable_acc": 0.37142857142857144,
+      "refuse_acc": null,
+      "gate": {
+        "parseable_min": 0.2,
+        "refuse_min": null,
+        "hard": false
+      },
+      "is_hard_gate": false,
+      "parseable_meets": true,
+      "refuse_meets": true,
+      "parseable_pass": true,
+      "refuse_pass": true,
+      "pass": true
+    }
+  ],
+  "failures": {
+    "canonical": [],
+    "paraphrase": [
+      {
+        "type": "parseable_missed",
+        "question": "how do you say cat in plural",
+        "expected_concept": "plural",
+        "expected_source": "cat",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "what do you call multiple cats",
+        "expected_concept": "plural",
+        "expected_source": "cat",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "how do you say run in past tense",
+        "expected_concept": "past_tense",
+        "expected_source": "run",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "what was the verb run yesterday",
+        "expected_concept": "past_tense",
+        "expected_source": "run",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "how did we say walk before",
+        "expected_concept": "past_tense",
+        "expected_source": "walk",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "the previous form of run",
+        "expected_concept": "past_tense",
+        "expected_source": "run",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "comparative on small",
+        "expected_concept": "comparative",
+        "expected_source": "small",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "the X-er form of fast",
+        "expected_concept": "comparative",
+        "expected_source": "fast",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "how to say big with -er ending",
+        "expected_concept": "comparative",
+        "expected_source": "big",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "the more form of tall",
+        "expected_concept": "comparative",
+        "expected_source": "tall",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "the most version of big",
+        "expected_concept": "superlative",
+        "expected_source": "big",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "highest form of fast",
+        "expected_concept": "superlative",
+        "expected_source": "fast",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "the X-est form of small",
+        "expected_concept": "superlative",
+        "expected_source": "small",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "extreme of warm",
+        "expected_concept": "superlative",
+        "expected_source": "warm",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "what's the negation of true",
+        "expected_concept": "opposite",
+        "expected_source": "true",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "what means the opposite to warm",
+        "expected_concept": "opposite",
+        "expected_source": "warm",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "what do we call a person that builds",
+        "expected_concept": "agentive",
+        "expected_source": "build",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "doer of paint",
+        "expected_concept": "agentive",
+        "expected_source": "paint",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "the X-er noun for help",
+        "expected_concept": "agentive",
+        "expected_source": "help",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "what do you call a baby cat",
+        "expected_concept": "young",
+        "expected_source": "cat",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "the kid form of dog",
+        "expected_concept": "young",
+        "expected_source": "dog",
+        "got": null
+      },
+      {
+        "type": "parseable_missed",
+        "question": "young version of cow",
+        "expected_concept": "young",
+        "expected_source": "cow",
+        "got": null
+      }
+    ]
+  },
+  "pass": true
+}

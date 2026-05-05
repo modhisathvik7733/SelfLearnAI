@@ -65,14 +65,34 @@ class _Pattern:
 # Each pattern uses `re.match` semantics — anchored at start, free at end —
 # so trailing punctuation / whitespace is allowed.
 
-_OPT_LEAD = r"(?:(?:what(?:'s| is) the |(?:tell me )?the |give me the |find the )?)"
+# Lead alternations cover the most common framing prefixes a user types.
+# Kept narrow: only forms where the question CLEARLY signals a request. We
+# do NOT add "i need" / "give me" because those can also start unrelated
+# requests (e.g., "i need a vacation"); patterns like that go through
+# Tier 2's learned classifier instead.
+_OPT_LEAD = (
+    r"(?:(?:"
+    r"what(?:'s| is) the |"
+    r"(?:tell me )?the |"
+    r"give me (?:the )?|"
+    r"find (?:the )?|"
+    r"i (?:need|want) (?:the )?|"
+    r"please (?:give me )?(?:the )?"
+    r")?)"
+)
 _OPT_TRAIL = r"\s*[?.!]?\s*$"
+
+# Many English questions of the form "X form of Y" can equivalently be
+# "X form for Y" — they mean the same thing; the only difference is
+# preposition. This tiny alternation covers about a third of the
+# paraphrase set.
+_OF_OR_FOR = r"(?:of|for)"
 
 DEFAULT_PATTERNS: tuple[_Pattern, ...] = (
     # ------- plural -------
     _Pattern(
         "plural", "plural.canonical",
-        re.compile(rf"^{_OPT_LEAD}plural (?:form )?of (?P<source>\w+){_OPT_TRAIL}", re.I),
+        re.compile(rf"^{_OPT_LEAD}plural (?:form )?{_OF_OR_FOR} (?P<source>\w+){_OPT_TRAIL}", re.I),
     ),
     _Pattern(
         "plural", "plural.makeit",
@@ -86,7 +106,7 @@ DEFAULT_PATTERNS: tuple[_Pattern, ...] = (
     # ------- past_tense -------
     _Pattern(
         "past_tense", "past.canonical",
-        re.compile(rf"^{_OPT_LEAD}past (?:tense )?(?:form )?of (?P<source>\w+){_OPT_TRAIL}", re.I),
+        re.compile(rf"^{_OPT_LEAD}past (?:tense )?(?:form )?{_OF_OR_FOR} (?P<source>\w+){_OPT_TRAIL}", re.I),
     ),
     _Pattern(
         "past_tense", "past.in_form",
@@ -97,7 +117,7 @@ DEFAULT_PATTERNS: tuple[_Pattern, ...] = (
     # than "more X" but they would never collide; ordered by concept clarity) -------
     _Pattern(
         "superlative", "sup.canonical",
-        re.compile(rf"^{_OPT_LEAD}superlative (?:form )?of (?P<source>\w+){_OPT_TRAIL}", re.I),
+        re.compile(rf"^{_OPT_LEAD}superlative (?:form )?{_OF_OR_FOR} (?P<source>\w+){_OPT_TRAIL}", re.I),
     ),
     _Pattern(
         "superlative", "sup.most",
@@ -107,27 +127,37 @@ DEFAULT_PATTERNS: tuple[_Pattern, ...] = (
     # ------- comparative -------
     _Pattern(
         "comparative", "comp.canonical",
-        re.compile(rf"^{_OPT_LEAD}comparative (?:form )?of (?P<source>\w+){_OPT_TRAIL}", re.I),
+        re.compile(rf"^{_OPT_LEAD}comparative (?:form )?{_OF_OR_FOR} (?P<source>\w+){_OPT_TRAIL}", re.I),
     ),
     _Pattern(
         "comparative", "comp.more",
         re.compile(rf"^more (?P<source>\w+){_OPT_TRAIL}", re.I),
     ),
 
-    # ------- opposite / antonym -------
+    # ------- opposite / antonym (incl. reverse, inverse, contrary as
+    # near-synonyms with the same intent) -------
     _Pattern(
         "opposite", "opp.canonical",
-        re.compile(rf"^{_OPT_LEAD}(?:opposite|antonym) of (?P<source>\w+){_OPT_TRAIL}", re.I),
+        re.compile(rf"^{_OPT_LEAD}(?:opposite|antonym|reverse|inverse|contrary) of (?P<source>\w+){_OPT_TRAIL}", re.I),
     ),
 
-    # ------- agentive ("one who Xs", "agent of X") -------
+    # ------- agentive ("one who Xs", "agent of X", "noun for someone who Xs") -------
     _Pattern(
         "agentive", "agent.canonical",
         re.compile(rf"^{_OPT_LEAD}agent(?:ive)? (?:form )?of (?P<source>\w+){_OPT_TRAIL}", re.I),
     ),
+    # In agentive "who Xs" patterns the trailing 3rd-person-singular suffix
+    # is either "s" (paint→paints, build→builds, write→writes) or "es"
+    # (teach→teaches, pass→passes, fix→fixes). Use a lazy stem capture
+    # plus optional "e" before "s" to handle both shapes correctly.
+    # (We do NOT handle the y→ies form here — that is Tier-2 territory.)
     _Pattern(
         "agentive", "agent.one_who",
-        re.compile(rf"^(?:a |an |one |someone |some(?:one|body) )?(?:person |someone )?who (?P<source>\w+)s{_OPT_TRAIL}", re.I),
+        re.compile(rf"^(?:a |an |one |someone |some(?:one|body) )?(?:person |someone )?who (?P<source>\w+?)e?s{_OPT_TRAIL}", re.I),
+    ),
+    _Pattern(
+        "agentive", "agent.noun_for",
+        re.compile(rf"^(?:the )?(?:noun|word|name) for (?:a |an )?(?:person |someone )?who (?P<source>\w+?)e?s{_OPT_TRAIL}", re.I),
     ),
 
     # ------- young animal -------
@@ -138,6 +168,14 @@ DEFAULT_PATTERNS: tuple[_Pattern, ...] = (
     _Pattern(
         "young", "young.what_is",
         re.compile(rf"^what is a (?:young |baby )(?P<source>\w+)(?: called)?{_OPT_TRAIL}", re.I),
+    ),
+    _Pattern(
+        "young", "young.name_for",
+        re.compile(rf"^(?:the )?name for (?:a |an )?(?:young |baby )(?P<source>\w+){_OPT_TRAIL}", re.I),
+    ),
+    _Pattern(
+        "young", "young.what_is_name",
+        re.compile(rf"^what is the name (?:of |for )(?:a |an )?(?:young |baby )(?P<source>\w+)(?: called)?{_OPT_TRAIL}", re.I),
     ),
 )
 
