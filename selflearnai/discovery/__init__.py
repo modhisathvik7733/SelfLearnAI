@@ -44,6 +44,11 @@ from .cluster import (
     silhouette_score,
     train_quick_operator,
 )
+from .validate import (
+    ValidationResult,
+    make_identity_candidate,
+    validate_candidate,
+)
 
 __all__ = [
     "WakeBuffer",
@@ -60,4 +65,7 @@ __all__ = [
     "operator_consistency",
     "silhouette_score",
     "train_quick_operator",
+    "ValidationResult",
+    "make_identity_candidate",
+    "validate_candidate",
 ]
