@@ -305,18 +305,22 @@ def main() -> None:
         idx = torch.randint(0, n, (args.batch_size,), device=args.device)
         psi_batch = psi_targets[idx]                 # [B, DIM]
         ids_batch = target_ids[idx]                  # [B, T]
-        mask_batch = target_mask[idx]                # [B, T]
 
         logits = decoder(psi_batch)                  # [B, T, V]
 
         # Parallel position-wise cross-entropy (NOT next-token prediction —
         # all positions predicted in parallel, attention is bidirectional).
-        ce_per_pos = F.cross_entropy(
+        # ALL positions including [PAD] participate in the loss: pad
+        # positions have target=pad_token_id so the decoder learns to
+        # output [PAD] there. Masking padding OUT of the loss left those
+        # positions un-supervised, and at inference the decoder filled
+        # them with random common tokens that dragged the re-encoded ψ
+        # off-target (the v1 bug — see commit log of this script).
+        # tokenizer.decode(skip_special_tokens=True) strips [PAD] cleanly.
+        ce_loss = F.cross_entropy(
             logits.reshape(-1, logits.size(-1)),
             ids_batch.reshape(-1),
-            reduction="none",
-        ).reshape(args.batch_size, -1)
-        ce_loss = (ce_per_pos * mask_batch).sum() / mask_batch.sum().clamp(min=1.0)
+        )
 
         ce_loss.backward()
         torch.nn.utils.clip_grad_norm_(decoder.parameters(), max_norm=1.0)
