@@ -34,6 +34,10 @@ from .ingest import (
     IngestionResult,
     ingest_domain,
 )
+from .conformal import (
+    DomainConformalCalibrator,
+    domain_coverage_curve,
+)
 
 __all__ = [
     "EnergyModelBase",
@@ -46,4 +50,6 @@ __all__ = [
     "IngestionConfig",
     "IngestionResult",
     "ingest_domain",
+    "DomainConformalCalibrator",
+    "domain_coverage_curve",
 ]
