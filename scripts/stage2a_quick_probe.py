@@ -86,16 +86,43 @@ except ImportError:
 
 
 _LT_INSTANCE = None
+_LT_INIT_ATTEMPTED = False
+_LT_INIT_ERROR: str | None = None
 
 
 def get_language_tool():
-    """Lazy-init LanguageTool. Returns None if not installed."""
-    global _LT_INSTANCE
+    """Lazy-init LanguageTool. Returns None if not installed OR if
+    runtime init fails (e.g., Java missing). Caches the failure so
+    we don't keep retrying on every call.
+
+    LanguageTool requires a Java JRE at RUNTIME even though the
+    Python package imports without it. Common cause: GPU images
+    don't ship with Java. Fix on the box: `apt-get install -y
+    default-jre` (or openjdk-17-jre). Until then we fall back to
+    the wordfreq proxy.
+    """
+    global _LT_INSTANCE, _LT_INIT_ATTEMPTED, _LT_INIT_ERROR, _HAS_LANGUAGE_TOOL
     if not _HAS_LANGUAGE_TOOL:
         return None
+    if _LT_INIT_ATTEMPTED and _LT_INSTANCE is None:
+        return None    # already failed once — don't retry
     if _LT_INSTANCE is None:
-        # 'en-US' is rule-based + statistical; no LLM.
-        _LT_INSTANCE = language_tool_python.LanguageTool("en-US")
+        _LT_INIT_ATTEMPTED = True
+        try:
+            # 'en-US' is rule-based + statistical; no LLM.
+            _LT_INSTANCE = language_tool_python.LanguageTool("en-US")
+        except Exception as e:                                  # noqa: BLE001
+            _LT_INIT_ERROR = f"{type(e).__name__}: {e}"
+            _LT_INSTANCE = None
+            # Disable for downstream callers and the verdict block.
+            _HAS_LANGUAGE_TOOL = False
+            print("\n  WARNING: LanguageTool runtime init failed:")
+            print(f"    {_LT_INIT_ERROR}")
+            print("  Falling back to wordfreq proxy as the grammar gate.")
+            print("  To enable the gold-standard gate later, install Java:")
+            print("    apt-get install -y default-jre   # Debian/Ubuntu")
+            print("    apt-get install -y openjdk-17-jre   # alt")
+            return None
     return _LT_INSTANCE
 
 
@@ -140,15 +167,19 @@ def grammar_grade(text: str) -> tuple[int, bool]:
     Plan §9.4 gate: ≥95% sentences pass (0 errors).
 
     Falls back to a strict version of the proxy if LanguageTool isn't
-    installed: passes iff proxy ≥ 0.55 (heuristic threshold).
+    installed OR if its runtime init failed (e.g., no Java on the box).
+    Proxy fallback: passes iff zipf-frequency proxy ≥ 0.55.
     """
-    if not _HAS_LANGUAGE_TOOL:
-        proxy = grammar_proxy(text)
-        return (0 if proxy >= 0.55 else 1, proxy >= 0.55)
-    lt = get_language_tool()
-    matches = lt.check(text)
-    n = len(matches)
-    return (n, n == 0)
+    if _HAS_LANGUAGE_TOOL:
+        lt = get_language_tool()
+        if lt is not None:
+            matches = lt.check(text)
+            n = len(matches)
+            return (n, n == 0)
+        # else: init just failed; _HAS_LANGUAGE_TOOL was flipped to
+        # False inside get_language_tool. Fall through to proxy.
+    proxy = grammar_proxy(text)
+    return (0 if proxy >= 0.55 else 1, proxy >= 0.55)
 
 
 def build_complete_word_mask(tok) -> torch.Tensor:
