@@ -30,8 +30,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import torch
-
 from selflearnai.memory import Corpus, Retriever
 from selflearnai.renderer import LMRenderer, PathBPipeline
 
@@ -91,14 +89,26 @@ def print_response(resp, *, show_prompt: bool = False) -> None:
     print("─" * 78)
     print(f"  query:           {resp.user_query}")
     print(f"  intent:          {resp.intent_kind}")
+
+    # Brain admit diagnostics
+    if resp.intent_kind == "factual_q":
+        if resp.brain_refusal:
+            print(f"  brain admit:     ✗ REFUSED  "
+                  f"top={resp.brain_admit_top_score:.3f}  "
+                  f"margin={resp.brain_admit_margin:+.3f}")
+            print(f"  brain reason:    {resp.refusal_reason}")
+        else:
+            print(f"  brain admit:     ✓ admitted  "
+                  f"top={resp.brain_admit_top_score:.3f}  "
+                  f"margin={resp.brain_admit_margin:+.3f}")
+
     if resp.retrieved_facts:
         print(f"  retrieved ({len(resp.retrieved_facts)}):")
         for i, (fact, score) in enumerate(zip(resp.retrieved_facts, resp.retrieved_scores)):
             print(f"    {i+1}. [cos {score:.3f}] {fact}")
     elif resp.intent_kind == "factual_q":
-        print(f"  retrieved:       (none — no fact above threshold)")
-    if resp.refusal_reason:
-        print(f"  refusal_reason:  {resp.refusal_reason}")
+        print(f"  retrieved:       (none — brain refused)")
+
     if show_prompt:
         print()
         print(f"  LM prompt sent:")
@@ -107,10 +117,18 @@ def print_response(resp, *, show_prompt: bool = False) -> None:
     print()
     print(f"  LM raw output:   {resp.lm_output_raw!r}")
     print(f"  LM tokens:       in={resp.lm_n_input_tokens}  out={resp.lm_n_output_tokens}")
+
+    # Three-axis verifier
     accept_mark = "✓" if resp.accepted else "✗"
     print(f"  verifier {accept_mark}:   "
           f"grounding {resp.grounding_cos:.3f} (≥{resp.grounding_threshold})  "
-          f"relevance {resp.relevance_cos:.3f} (≥{resp.relevance_threshold})")
+          f"relevance {resp.relevance_cos:.3f} (≥{resp.relevance_threshold})  "
+          f"content {resp.content_overlap_rate:.3f} (≥{resp.content_threshold})")
+    if resp.novel_content_words:
+        novel_str = ", ".join(resp.novel_content_words[:8])
+        if len(resp.novel_content_words) > 8:
+            novel_str += f", +{len(resp.novel_content_words)-8} more"
+        print(f"  novel words:     [{novel_str}]")
     if resp.verifier_failure_reason:
         print(f"  failure_reason:  {resp.verifier_failure_reason}")
     print()

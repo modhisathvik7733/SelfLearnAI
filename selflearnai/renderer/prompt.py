@@ -55,11 +55,16 @@ class PromptBuilder:
     """
 
     SYSTEM_GROUNDED = (
-        "You are a careful assistant. You answer questions using ONLY the facts provided. "
-        "If the facts do not contain the answer, you say exactly: "
-        "\"I don't have information about that.\" "
-        "You never invent or extrapolate facts. "
-        "You answer in 1-2 short sentences."
+        "You are a careful assistant. You answer questions using ONLY the facts provided.\n"
+        "STRICT RULES:\n"
+        "1. Use ONLY the SINGLE most relevant fact (or 2 facts if both directly answer the question).\n"
+        "2. IGNORE facts that are unrelated to the question, even if they were retrieved.\n"
+        "3. Your answer must be a paraphrase of the relevant fact(s) — do NOT add specific terms, "
+        "names, numbers, or details that are not in the chosen fact(s).\n"
+        "4. If NO fact directly answers the question, say exactly: "
+        "\"I don't have information about that.\"\n"
+        "5. Answer in 1 short sentence (or 2 only when the question has 2 sub-questions).\n"
+        "6. Do NOT explain or elaborate beyond the fact's content."
     )
 
     SYSTEM_TRANSFORMATION = (
@@ -111,7 +116,12 @@ class PromptBuilder:
         user = (
             f"FACTS:\n{facts_block}\n\n"
             f"QUESTION: {intent.user_query}\n\n"
-            f"ANSWER (1-2 short sentences, using only the facts above):"
+            f"INSTRUCTIONS: Pick the SINGLE most relevant fact (or two if both directly "
+            f"answer the question). Paraphrase its content as your answer. Do NOT introduce "
+            f"any specific term, name, or detail that is not in your chosen fact(s). If no "
+            f"fact directly answers the question, output exactly: "
+            f"\"I don't have information about that.\"\n\n"
+            f"ANSWER:"
         )
         return self.lm.chat_format(self.SYSTEM_GROUNDED, user)
 
