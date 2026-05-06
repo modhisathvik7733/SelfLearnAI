@@ -150,10 +150,20 @@ def main() -> None:
     parser.add_argument("--lm-dtype", default="float16",
                         choices=["float16", "bfloat16", "float32"])
     parser.add_argument("--retrieval-k", type=int, default=3)
-    parser.add_argument("--admit-threshold", type=float, default=0.55,
-                        help="If best retrieval score < this, treat as no facts.")
+    parser.add_argument("--admit-threshold", type=float, default=0.78,
+                        help="Tier 1 floor: top retrieval below this → BRAIN REFUSE. "
+                             "Encoder background cosine on E5 is ~0.74 for unrelated text.")
+    parser.add_argument("--strong-threshold", type=float, default=0.82,
+                        help="Tier 3 ceiling: top ≥ this → admit all retrieved ≥ "
+                             "admit-threshold without margin requirement (compositional).")
+    parser.add_argument("--admit-margin", type=float, default=0.04,
+                        help="Tier 2 (borderline) margin: top - second must clear this.")
     parser.add_argument("--grounding-threshold", type=float, default=0.65)
     parser.add_argument("--relevance-threshold", type=float, default=0.50)
+    parser.add_argument("--content-threshold", type=float, default=0.50,
+                        help="Content-word fidelity gate. fraction of rendered content "
+                             "words that match (substring) source must clear this. "
+                             "Catches LM hallucination.")
     parser.add_argument("--max-new-tokens", type=int, default=120)
     parser.add_argument("--query", default=None,
                         help="If given: one-shot run with this query. Otherwise interactive.")
@@ -202,14 +212,21 @@ def main() -> None:
         retriever=retriever,
         grounding_threshold=args.grounding_threshold,
         relevance_threshold=args.relevance_threshold,
+        content_threshold=args.content_threshold,
         max_new_tokens=args.max_new_tokens,
         retrieval_k=args.retrieval_k,
         retrieval_admit_threshold=args.admit_threshold,
+        retrieval_admit_margin=args.admit_margin,
+        retrieval_strong_threshold=args.strong_threshold,
     )
     print(f"\n[4] Pipeline ready.")
-    print(f"    grounding_threshold={args.grounding_threshold}  "
-          f"relevance_threshold={args.relevance_threshold}  "
-          f"admit_threshold={args.admit_threshold}")
+    print(f"    brain admit:     tiered  "
+          f"below<{args.admit_threshold}  "
+          f"borderline[{args.admit_threshold},{args.strong_threshold})+margin≥{args.admit_margin}  "
+          f"strong≥{args.strong_threshold}")
+    print(f"    verifier:        grounding≥{args.grounding_threshold}  "
+          f"relevance≥{args.relevance_threshold}  "
+          f"content≥{args.content_threshold}")
 
     # ---- Output log file --------------------------------------------
     out_path = Path(args.out)
