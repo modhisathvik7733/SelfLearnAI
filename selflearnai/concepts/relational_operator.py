@@ -66,12 +66,27 @@ class RelationalOperator(nn.Module):
         dim: int = 1024,
         num_axes: int = 8,
         mlp_hidden: int = 192,
+        use_mlp: bool = True,
     ) -> None:
+        """
+        Args:
+            use_mlp: When True, includes the shared content-sensitive
+                residual MLP (~150K params). When False, the operator
+                is purely linear: delta = alpha · v_axis (only ~D × num_axes
+                + num_axes params). The False mode is the diagnostic
+                introduced 2026-05-06 after the v1 RelationalOperator
+                hit 3% top-1 on held-out — the ~6000:1 params:examples
+                ratio caused the MLP to memorize entity→value mappings
+                instead of learning axis-as-direction. Linear-only mode
+                forces the operator to learn ONLY per-axis directions
+                (~8K params, no memorization possible at 100 examples).
+        """
         super().__init__()
         if num_axes < 1:
             raise ValueError(f"num_axes must be >= 1, got {num_axes}")
         self.dim = dim
         self.num_axes = num_axes
+        self.use_mlp = use_mlp
 
         # Per-axis learnable directions. Initialized small so each axis
         # starts near identity; training pulls them apart.
@@ -79,11 +94,16 @@ class RelationalOperator(nn.Module):
         # Per-axis magnitude scalars.
         self.alpha = nn.Parameter(torch.ones(num_axes))
         # Shared content-sensitive residual (cross-axis transfer here).
-        self.residual = nn.Sequential(
-            nn.Linear(2 * dim, mlp_hidden),
-            nn.GELU(),
-            nn.Linear(mlp_hidden, dim),
-        )
+        # Skipped entirely when use_mlp=False — operator becomes pure
+        # per-axis direction.
+        if use_mlp:
+            self.residual = nn.Sequential(
+                nn.Linear(2 * dim, mlp_hidden),
+                nn.GELU(),
+                nn.Linear(mlp_hidden, dim),
+            )
+        else:
+            self.residual = None
 
     def forward(
         self,
@@ -120,8 +140,13 @@ class RelationalOperator(nn.Module):
 
         v = self.v[axis_idx]                      # (B, D)
         alpha = self.alpha[axis_idx].unsqueeze(-1)  # (B, 1)
-        combined = torch.cat([z_entity, v], dim=-1)
-        delta = alpha * v + self.residual(combined)
+        if self.use_mlp:
+            combined = torch.cat([z_entity, v], dim=-1)
+            delta = alpha * v + self.residual(combined)
+        else:
+            # Linear-only: pure per-axis direction. Cannot memorize
+            # entity-specific mappings — forces axis-as-direction learning.
+            delta = alpha * v
         z_result = z_entity + delta
         if single_input:
             z_result = z_result.squeeze(0)

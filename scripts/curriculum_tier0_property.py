@@ -103,10 +103,11 @@ def train_operator(
     epochs: int,
     lr: float,
     log_every: int,
+    weight_decay: float = 0.0,
 ) -> list[dict]:
     """Cosine-loss training. Mirrors Stage 0 train_operator pattern but
     with axis-conditioned forward."""
-    opt = torch.optim.AdamW(op.parameters(), lr=lr)
+    opt = torch.optim.AdamW(op.parameters(), lr=lr, weight_decay=weight_decay)
     history: list[dict] = []
     op.train()
     for step in range(epochs):
@@ -157,7 +158,6 @@ def evaluate_holdout(
     holdout_pairs: list[dict],
     pool: list[str],
     vocab: AxisVocabulary,
-    device: str,
 ) -> dict:
     """For each held-out (entity, axis, expected_value), compute
     z_pred = op(encode(entity), axis_idx). Compare to the pool by cosine.
@@ -235,6 +235,15 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--log-every", type=int, default=300)
     parser.add_argument("--mlp-hidden", type=int, default=192)
+    parser.add_argument("--no-mlp", action="store_true",
+                        help="Diagnostic mode: drop the shared MLP, use only "
+                             "per-axis direction (delta = alpha · v_axis). "
+                             "Forces axis-as-direction learning; cannot memorize "
+                             "entity→value mappings. Use after the v1 architecture "
+                             "(MLP-on) overfits to ~3%% top-1.")
+    parser.add_argument("--weight-decay", type=float, default=0.0,
+                        help="L2 weight decay (anti-overfitting knob). 0.0 = off; "
+                             "try 0.01-0.1 if MLP version overfits.")
     parser.add_argument("--top1-min", type=float, default=0.60,
                         help="Acceptance: held-out top-1 ≥ this overall.")
     parser.add_argument("--per-axis-min", type=float, default=0.50,
@@ -296,19 +305,27 @@ def main() -> None:
     print(f"  z_value:  {tuple(z_value.shape)}")
 
     # ---- Train --------------------------------------------------------
-    print(f"\n[4] Training RelationalOperator "
-          f"({args.epochs} epochs, lr={args.lr})")
+    use_mlp = not args.no_mlp
+    arch_label = "MLP-on" if use_mlp else "linear-only (no MLP)"
+    print(f"\n[4] Training RelationalOperator [{arch_label}] "
+          f"({args.epochs} epochs, lr={args.lr}, "
+          f"weight_decay={args.weight_decay})")
     print("-" * 78)
     torch.manual_seed(args.seed)
     op = RelationalOperator(
         dim=DIM, num_axes=len(vocab), mlp_hidden=args.mlp_hidden,
+        use_mlp=use_mlp,
     ).to(args.device)
     n_params = sum(p.numel() for p in op.parameters())
     print(f"  RelationalOperator: {n_params/1e3:.1f}K params, "
-          f"{len(vocab)} axes")
+          f"{len(vocab)} axes, mode={arch_label}")
+    if not use_mlp:
+        print(f"  (linear-only diagnostic — cannot memorize entity→value; "
+              f"forces axis-as-direction learning)")
     history = train_operator(
         op, z_entity, z_value, train_axis_idx,
         epochs=args.epochs, lr=args.lr, log_every=args.log_every,
+        weight_decay=args.weight_decay,
     )
     for h in history:
         print(f"  step {h['step']:>4}  loss={h['loss']:.4f}  "
@@ -318,7 +335,7 @@ def main() -> None:
     print(f"\n[5] Held-out evaluation ({len(holdout_pairs)} truly-novel pairs)")
     print("-" * 78)
     eval_result = evaluate_holdout(
-        op, encode, holdout_pairs, pool, vocab, args.device,
+        op, encode, holdout_pairs, pool, vocab,
     )
 
     print(f"\n  per-axis top-1:")
