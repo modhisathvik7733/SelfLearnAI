@@ -50,9 +50,12 @@ class RenderedResponse:
     relevance_cos: float = 0.0
     content_overlap_rate: float = 0.0
     novel_content_words: list[str] = field(default_factory=list)
+    rare_novel_content_words: list[str] = field(default_factory=list)
+    rare_novel_count: int = 0
     grounding_threshold: float = 0.0
     relevance_threshold: float = 0.0
     content_threshold: float = 0.0
+    rare_novel_max: int = 0
     verifier_failure_reason: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -79,6 +82,8 @@ class PathBPipeline:
         grounding_threshold: float = 0.65,
         relevance_threshold: float = 0.50,
         content_threshold: float = 0.50,
+        rare_novel_max: int = 1,
+        common_zipf_threshold: float = 4.0,
         max_new_tokens: int = 120,
         retrieval_k: int = 3,
         retrieval_admit_threshold: float = 0.78,
@@ -108,6 +113,8 @@ class PathBPipeline:
             grounding_threshold=grounding_threshold,
             relevance_threshold=relevance_threshold,
             content_threshold=content_threshold,
+            rare_novel_max=rare_novel_max,
+            common_zipf_threshold=common_zipf_threshold,
         )
         self.max_new_tokens = max_new_tokens
         self.retrieval_k = retrieval_k
@@ -231,9 +238,11 @@ class PathBPipeline:
                 grounded=True, relevant=True, content_fidelity_passed=True,
                 accept=True,
                 grounding_cos=1.0, relevance_cos=1.0, content_overlap_rate=1.0,
+                rare_novel_count=0,
                 grounding_threshold=self.verifier.grounding_threshold,
                 relevance_threshold=self.verifier.relevance_threshold,
                 content_threshold=self.verifier.content_threshold,
+                rare_novel_max=self.verifier.rare_novel_max,
                 failure_reason=None,
             )
         else:
@@ -265,9 +274,12 @@ class PathBPipeline:
             relevance_cos=verification.relevance_cos,
             content_overlap_rate=verification.content_overlap_rate,
             novel_content_words=list(verification.novel_content_words),
+            rare_novel_content_words=list(verification.rare_novel_content_words),
+            rare_novel_count=verification.rare_novel_count,
             grounding_threshold=verification.grounding_threshold,
             relevance_threshold=verification.relevance_threshold,
             content_threshold=verification.content_threshold,
+            rare_novel_max=verification.rare_novel_max,
             verifier_failure_reason=verification.failure_reason,
         )
 

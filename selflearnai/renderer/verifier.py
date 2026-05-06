@@ -57,6 +57,21 @@ _STOPWORDS = frozenset({
 })
 
 
+# Optional dependency: wordfreq — used to distinguish common-paraphrase
+# words (high zipf, fluency) from rare-specific words (low zipf, likely
+# hallucinated facts). If wordfreq is unavailable, the controlled gate
+# degrades gracefully to "every novel word treated as common" — i.e. it
+# does NOT block rare-novel additions, only the overlap-rate gate fires.
+try:
+    from wordfreq import zipf_frequency as _zipf_frequency  # type: ignore[import-not-found]
+    _HAS_WORDFREQ = True
+except ImportError:
+    _HAS_WORDFREQ = False
+    def _zipf_frequency(word: str, lang: str) -> float:        # type: ignore[no-redef]
+        del word, lang
+        return 5.0       # treat as common when wordfreq unavailable
+
+
 def _content_words(text: str, *, min_len: int = 4) -> list[str]:
     """Return list of lowercased content words (alphabetic, ≥min_len, non-stop)."""
     return [
@@ -71,44 +86,55 @@ def content_overlap(
     *,
     user_query: str = "",
     min_len: int = 4,
-) -> tuple[float, list[str], list[str]]:
-    """Compute content-word fidelity between rendered text and sources.
+    common_zipf_threshold: float = 4.0,
+) -> tuple[float, list[str], list[str], list[str]]:
+    """Controlled-enrichment content fidelity.
 
-    A rendered content word "passes" if it appears as a SUBSTRING in the
-    source-text concatenation. Substring (not exact equality) so that
-    'hunt' matches 'hunting', 'cat' matches 'cats', etc. — handles
-    morphology without needing a stemmer.
+    Distinguishes three classes of rendered content words:
+      MATCHED    — appears as substring in source/query (paraphrase ground truth)
+      COMMON-NOVEL — not in source, but high-frequency (zipf ≥ threshold).
+                     Likely paraphrase synonym, allowed as fluency.
+      RARE-NOVEL  — not in source AND low-frequency (zipf < threshold).
+                     Likely a SPECIFIC FACT smuggled in by the LM.
+                     Blocked.
 
-    The user query is included as a source by default — words from the
-    question are clearly safe to repeat in the answer.
+    The verifier uses two gates on top of these:
+      1. effective_overlap = (matched + common_novel) / total ≥ τ_overlap
+      2. rare_novel_count ≤ τ_rare_max
+
+    Both must pass for content fidelity. This is the "controlled enrichment"
+    design: paraphrase fluency allowed; specific-entity hallucinations blocked.
+
+    A rendered content word "matches" if it appears as a SUBSTRING in
+    source/query — so 'hunt' matches 'hunting', 'cat' matches 'cats'.
 
     Returns:
-      (overlap_rate, novel_words, matched_words)
-        overlap_rate: |matched| / |total content words|
-        novel_words:  rendered content words NOT found in any source
-        matched_words: rendered content words that DID match
+      (effective_overlap, novel_words, matched_words, rare_novel_words)
     """
     rendered_cw = _content_words(rendered_text, min_len=min_len)
     if not rendered_cw:
-        return 1.0, [], []
+        return 1.0, [], [], []
     source_blob = " " + " ".join([user_query] + source_texts).lower() + " "
 
     matched: list[str] = []
     novel: list[str] = []
+    rare_novel: list[str] = []
     for w in rendered_cw:
-        # Substring match — so 'hunt' matches 'hunting', 'cat' matches 'cats'.
-        # Use word boundary on left to avoid 'cat' spuriously matching 'concat'.
-        # We intentionally keep the right boundary loose for morphology.
         if re.search(rf"[^a-z]{re.escape(w)}", source_blob):
             matched.append(w)
         else:
             novel.append(w)
-    return len(matched) / len(rendered_cw), novel, matched
+            if _zipf_frequency(w, "en") < common_zipf_threshold:
+                rare_novel.append(w)
+
+    common_novel_count = len(novel) - len(rare_novel)
+    effective_overlap = (len(matched) + common_novel_count) / len(rendered_cw)
+    return effective_overlap, novel, matched, rare_novel
 
 
 @dataclass
 class VerificationResult:
-    """Verification verdict — three checks + diagnostic info."""
+    """Verification verdict — three checks + controlled-enrichment diagnostics."""
     grounded: bool
     relevant: bool
     content_fidelity_passed: bool
@@ -116,18 +142,28 @@ class VerificationResult:
     grounding_cos: float
     relevance_cos: float
     content_overlap_rate: float
+    rare_novel_count: int = 0
     novel_content_words: list[str] = field(default_factory=list)
+    rare_novel_content_words: list[str] = field(default_factory=list)
     matched_content_words: list[str] = field(default_factory=list)
     grounding_threshold: float = 0.0
     relevance_threshold: float = 0.0
     content_threshold: float = 0.0
+    rare_novel_max: int = 0
     failure_reason: Optional[str] = None
 
 
 class RenderingVerifier:
-    """Three-axis verifier: cos grounding + cos relevance + content-word fidelity.
+    """Three-axis verifier: cos grounding + cos relevance + controlled-enrichment
+    content-word fidelity.
 
-    Construct once per session; call `verify` for each rendered output.
+    Content fidelity is a TWO-PRONGED gate (controlled enrichment):
+      1. effective_overlap = (matched + common-novel) / total ≥ content_threshold
+         Common-paraphrase synonyms (high zipf frequency) count as overlap —
+         they're fluency, not hallucination.
+      2. rare_novel_count ≤ rare_novel_max
+         Rare/specific words (low zipf frequency) that aren't in source are
+         treated as smuggled-in facts. Allow 1 (synonym safety); block 2+.
 
     `encode_fn`: list[str] -> Tensor of shape (n, D). Pass the same
     encoder the brain uses (E5 frozen).
@@ -140,16 +176,22 @@ class RenderingVerifier:
         grounding_threshold: float = 0.65,
         relevance_threshold: float = 0.50,
         content_threshold: float = 0.50,
+        rare_novel_max: int = 1,
+        common_zipf_threshold: float = 4.0,
     ) -> None:
         for name, val in (("grounding", grounding_threshold),
                           ("relevance", relevance_threshold),
                           ("content", content_threshold)):
             if not 0.0 < val < 1.0:
                 raise ValueError(f"{name}_threshold out of (0,1): {val}")
+        if rare_novel_max < 0:
+            raise ValueError(f"rare_novel_max must be >= 0, got {rare_novel_max}")
         self.encode_fn = encode_fn
         self.grounding_threshold = grounding_threshold
         self.relevance_threshold = relevance_threshold
         self.content_threshold = content_threshold
+        self.rare_novel_max = rare_novel_max
+        self.common_zipf_threshold = common_zipf_threshold
 
     @torch.no_grad()
     def verify(
@@ -170,13 +212,15 @@ class RenderingVerifier:
                 grounded=False, relevant=False, content_fidelity_passed=False,
                 accept=False,
                 grounding_cos=0.0, relevance_cos=0.0, content_overlap_rate=0.0,
+                rare_novel_count=0,
                 grounding_threshold=self.grounding_threshold,
                 relevance_threshold=self.relevance_threshold,
                 content_threshold=self.content_threshold,
+                rare_novel_max=self.rare_novel_max,
                 failure_reason="rendered text is empty",
             )
 
-        # --- 1. Grounding (cos) -------------------------------------
+        # --- 1. Grounding (cos) + 2. Relevance (cos) ----------------
         z_rendered = self._encode_one(rendered_text)
         z_query = self._encode_one(user_query)
         relevance_cos = float(F.cosine_similarity(
@@ -192,27 +236,27 @@ class RenderingVerifier:
         else:
             grounding_cos = 1.0    # no target → cosine auto-passes
 
-        # --- 3. Content-word fidelity -------------------------------
-        # Pass user_query as a source so the LM can repeat query words
-        # without flagging them as novel.
+        # --- 3. Content-word fidelity (controlled enrichment) -------
         if brain_target_texts:
-            overlap_rate, novel, matched = content_overlap(
-                rendered_text, brain_target_texts, user_query=user_query,
+            overlap_rate, novel, matched, rare_novel = content_overlap(
+                rendered_text, brain_target_texts,
+                user_query=user_query,
+                common_zipf_threshold=self.common_zipf_threshold,
             )
         else:
-            # No brain target → only check against query (lenient)
-            overlap_rate, novel, matched = content_overlap(
-                rendered_text, [], user_query=user_query,
+            overlap_rate, novel, matched, rare_novel = content_overlap(
+                rendered_text, [],
+                user_query=user_query,
+                common_zipf_threshold=self.common_zipf_threshold,
             )
-            # When there's no target, allow a refusal-shaped response to
-            # pass content fidelity (rendered text often has no overlap
-            # with empty source).
             if "information" in rendered_text.lower():
-                overlap_rate = 1.0
+                overlap_rate = 1.0           # refusal-shaped output auto-passes
 
         grounded = grounding_cos >= self.grounding_threshold
         relevant = relevance_cos >= self.relevance_threshold
-        content_passed = overlap_rate >= self.content_threshold
+        overlap_passed = overlap_rate >= self.content_threshold
+        rare_passed = len(rare_novel) <= self.rare_novel_max
+        content_passed = overlap_passed and rare_passed
         accept = grounded and relevant and content_passed
 
         reason = None
@@ -222,13 +266,21 @@ class RenderingVerifier:
                 parts.append(f"grounding {grounding_cos:.3f} < {self.grounding_threshold}")
             if not relevant:
                 parts.append(f"relevance {relevance_cos:.3f} < {self.relevance_threshold}")
-            if not content_passed:
+            if not overlap_passed:
                 novel_str = ", ".join(novel[:6])
                 if len(novel) > 6:
                     novel_str += f", +{len(novel)-6} more"
                 parts.append(
-                    f"content fidelity {overlap_rate:.3f} < "
-                    f"{self.content_threshold} (novel words: [{novel_str}])"
+                    f"effective overlap {overlap_rate:.3f} < "
+                    f"{self.content_threshold} (novel: [{novel_str}])"
+                )
+            if not rare_passed:
+                rare_str = ", ".join(rare_novel[:6])
+                if len(rare_novel) > 6:
+                    rare_str += f", +{len(rare_novel)-6} more"
+                parts.append(
+                    f"rare-novel count {len(rare_novel)} > "
+                    f"{self.rare_novel_max} (specific facts smuggled in: [{rare_str}])"
                 )
             reason = "; ".join(parts)
 
@@ -240,11 +292,14 @@ class RenderingVerifier:
             grounding_cos=grounding_cos,
             relevance_cos=relevance_cos,
             content_overlap_rate=overlap_rate,
+            rare_novel_count=len(rare_novel),
             novel_content_words=novel,
+            rare_novel_content_words=rare_novel,
             matched_content_words=matched,
             grounding_threshold=self.grounding_threshold,
             relevance_threshold=self.relevance_threshold,
             content_threshold=self.content_threshold,
+            rare_novel_max=self.rare_novel_max,
             failure_reason=reason,
         )
 

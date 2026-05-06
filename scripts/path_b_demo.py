@@ -126,12 +126,24 @@ def print_response(resp, *, show_prompt: bool = False) -> None:
     print(f"  verifier {accept_mark}:   "
           f"grounding {resp.grounding_cos:.3f} (≥{resp.grounding_threshold})  "
           f"relevance {resp.relevance_cos:.3f} (≥{resp.relevance_threshold})  "
-          f"content {resp.content_overlap_rate:.3f} (≥{resp.content_threshold})")
+          f"content {resp.content_overlap_rate:.3f} (≥{resp.content_threshold})  "
+          f"rare-novel {resp.rare_novel_count} (≤{resp.rare_novel_max})")
     if resp.novel_content_words:
         novel_str = ", ".join(resp.novel_content_words[:8])
         if len(resp.novel_content_words) > 8:
             novel_str += f", +{len(resp.novel_content_words)-8} more"
-        print(f"  novel words:     [{novel_str}]")
+        # Highlight rare ones (the dangerous ones)
+        rare_set = set(resp.rare_novel_content_words)
+        if rare_set:
+            highlighted = ", ".join(
+                f"⚠{w}" if w in rare_set else w
+                for w in resp.novel_content_words[:8]
+            )
+            print(f"  novel words:     [{highlighted}]")
+            print(f"  rare novel:      [{', '.join(resp.rare_novel_content_words[:8])}]"
+                  f" ← specific facts; allowed up to {resp.rare_novel_max}")
+        else:
+            print(f"  novel words:     [{novel_str}]  (all common-paraphrase, OK)")
     if resp.verifier_failure_reason:
         print(f"  failure_reason:  {resp.verifier_failure_reason}")
     print()
@@ -162,8 +174,15 @@ def main() -> None:
     parser.add_argument("--relevance-threshold", type=float, default=0.50)
     parser.add_argument("--content-threshold", type=float, default=0.50,
                         help="Content-word fidelity gate. fraction of rendered content "
-                             "words that match (substring) source must clear this. "
-                             "Catches LM hallucination.")
+                             "words that match (substring) source OR are common-paraphrase "
+                             "synonyms must clear this.")
+    parser.add_argument("--rare-novel-max", type=int, default=1,
+                        help="Max rare-novel words allowed (controlled-enrichment cap on "
+                             "specific entities the LM might smuggle in). 0 = strict; "
+                             "1 = allow one synonym safety; 2+ = looser.")
+    parser.add_argument("--common-zipf", type=float, default=4.0,
+                        help="Frequency cutoff between 'common-paraphrase' (allowed as "
+                             "fluency) and 'rare-specific' (likely hallucinated facts).")
     parser.add_argument("--max-new-tokens", type=int, default=120)
     parser.add_argument("--query", default=None,
                         help="If given: one-shot run with this query. Otherwise interactive.")
@@ -213,6 +232,8 @@ def main() -> None:
         grounding_threshold=args.grounding_threshold,
         relevance_threshold=args.relevance_threshold,
         content_threshold=args.content_threshold,
+        rare_novel_max=args.rare_novel_max,
+        common_zipf_threshold=args.common_zipf,
         max_new_tokens=args.max_new_tokens,
         retrieval_k=args.retrieval_k,
         retrieval_admit_threshold=args.admit_threshold,
@@ -226,7 +247,8 @@ def main() -> None:
           f"strong≥{args.strong_threshold}")
     print(f"    verifier:        grounding≥{args.grounding_threshold}  "
           f"relevance≥{args.relevance_threshold}  "
-          f"content≥{args.content_threshold}")
+          f"content≥{args.content_threshold} (controlled-enrichment, "
+          f"rare-novel ≤ {args.rare_novel_max}, zipf cutoff {args.common_zipf})")
 
     # ---- Output log file --------------------------------------------
     out_path = Path(args.out)
