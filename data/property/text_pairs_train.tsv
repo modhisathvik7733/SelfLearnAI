@@ -1,0 +1,120 @@
+# Property training pairs for Tier 0.1 (RelationalOperator).
+# Format: entity<TAB>axis<TAB>value
+# Hand-curated, common-knowledge. ~100 pairs across 8 axes.
+# Held-out entities are deliberately NOT in this file (see text_pairs_holdout.tsv).
+
+# --- function (15 pairs) — what does X do? ---
+cat	function	hunt mice
+dog	function	guard house
+clock	function	tell time
+car	function	travel distance
+lamp	function	produce light
+fan	function	move air
+knife	function	cut things
+hammer	function	drive nails
+brain	function	think thoughts
+heart	function	pump blood
+lungs	function	breathe air
+eye	function	see images
+ear	function	hear sounds
+stomach	function	digest food
+phone	function	make calls
+
+# --- requires (15 pairs) — what does X need? ---
+plant	requires	sunlight
+fire	requires	oxygen
+fish	requires	water
+human	requires	food
+seed	requires	soil
+boat	requires	water
+candle	requires	wax
+car	requires	fuel
+baby	requires	milk
+tree	requires	roots
+flower	requires	pollen
+battery	requires	charge
+cake	requires	flour
+soup	requires	vegetables
+engine	requires	oil
+
+# --- sound (10 pairs) — what sound does X make? ---
+cat	sound	meow
+dog	sound	bark
+cow	sound	moo
+duck	sound	quack
+lion	sound	roar
+bell	sound	ring
+piano	sound	music
+clock	sound	tick
+sheep	sound	bleat
+pig	sound	oink
+
+# --- habitat (12 pairs) — where does X live? ---
+fish	habitat	water
+penguin	habitat	antarctic
+camel	habitat	desert
+polar bear	habitat	arctic
+monkey	habitat	forest
+lion	habitat	savanna
+dolphin	habitat	ocean
+eagle	habitat	mountain
+owl	habitat	tree
+mouse	habitat	hole
+deer	habitat	forest
+whale	habitat	ocean
+
+# --- color (10 pairs) — what color is X? ---
+sky	color	blue
+grass	color	green
+sun	color	yellow
+snow	color	white
+coal	color	black
+blood	color	red
+lemon	color	yellow
+orange	color	orange
+apple	color	red
+banana	color	yellow
+
+# --- made_of (10 pairs) — what is X made of? ---
+bread	made_of	flour
+glass	made_of	sand
+paper	made_of	wood
+cheese	made_of	milk
+wine	made_of	grapes
+butter	made_of	milk
+brick	made_of	clay
+rope	made_of	fiber
+honey	made_of	nectar
+yogurt	made_of	milk
+
+# --- used_for (15 pairs) — what is X used for? ---
+pen	used_for	writing
+spoon	used_for	eating
+soap	used_for	washing
+key	used_for	unlocking
+bed	used_for	sleeping
+shoe	used_for	walking
+shovel	used_for	digging
+axe	used_for	chopping
+razor	used_for	shaving
+umbrella	used_for	rain
+camera	used_for	photographing
+ladder	used_for	climbing
+needle	used_for	sewing
+saw	used_for	cutting
+brush	used_for	cleaning
+
+# --- part_of (13 pairs) — what is X part of? ---
+leaf	part_of	tree
+finger	part_of	hand
+wheel	part_of	car
+petal	part_of	flower
+wing	part_of	bird
+tail	part_of	animal
+branch	part_of	tree
+root	part_of	plant
+tooth	part_of	mouth
+keyboard	part_of	computer
+screen	part_of	monitor
+button	part_of	shirt
+lid	part_of	pot

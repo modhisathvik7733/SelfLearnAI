@@ -1,0 +1,51 @@
+# Property held-out pairs for Tier 0.1 evaluation.
+# Format: entity<TAB>axis<TAB>value
+# RULE: every entity here must NOT appear in text_pairs_train.tsv.
+# This is the genuine generalization test — the operator must apply
+# the learned axis to novel entities.
+
+# --- function (4 pairs) — novel entities ---
+liver	function	filter blood
+printer	function	produce paper
+fridge	function	cool food
+kidney	function	remove waste
+
+# --- requires (4 pairs) — novel entities ---
+bee	requires	flowers
+radio	requires	signal
+horse	requires	grass
+pizza	requires	cheese
+
+# --- sound (4 pairs) — novel entities ---
+horse	sound	neigh
+snake	sound	hiss
+frog	sound	ribbit
+wolf	sound	howl
+
+# --- habitat (4 pairs) — novel entities ---
+shark	habitat	ocean
+worm	habitat	soil
+bat	habitat	cave
+squirrel	habitat	tree
+
+# --- color (3 pairs) — novel entities ---
+night	color	dark
+ash	color	grey
+ocean	color	blue
+
+# --- made_of (3 pairs) — novel entities ---
+chocolate	made_of	cocoa
+rubber	made_of	latex
+cotton	made_of	plant
+
+# --- used_for (4 pairs) — novel entities ---
+broom	used_for	sweeping
+scissors	used_for	cutting
+pillow	used_for	sleeping
+microscope	used_for	observing
+
+# --- part_of (4 pairs) — novel entities ---
+pedal	part_of	bicycle
+nose	part_of	face
+sleeve	part_of	shirt
+yolk	part_of	egg
