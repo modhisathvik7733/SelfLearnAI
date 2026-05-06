@@ -92,13 +92,16 @@ def print_response(resp, *, show_prompt: bool = False) -> None:
 
     # Brain admit diagnostics
     if resp.intent_kind == "factual_q":
+        tier = resp.brain_admit_tier
         if resp.brain_refusal:
             print(f"  brain admit:     ✗ REFUSED  "
+                  f"tier={tier}  "
                   f"top={resp.brain_admit_top_score:.3f}  "
                   f"margin={resp.brain_admit_margin:+.3f}")
             print(f"  brain reason:    {resp.refusal_reason}")
         else:
             print(f"  brain admit:     ✓ admitted  "
+                  f"tier={tier}  "
                   f"top={resp.brain_admit_top_score:.3f}  "
                   f"margin={resp.brain_admit_margin:+.3f}")
 

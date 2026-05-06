@@ -39,6 +39,7 @@ class RenderedResponse:
     brain_refusal: bool = False
     brain_admit_top_score: float = 0.0
     brain_admit_margin: float = 0.0
+    brain_admit_tier: str = ""
     # LM rendering
     lm_prompt: str = ""
     lm_output_raw: str = ""
@@ -82,13 +83,21 @@ class PathBPipeline:
         retrieval_k: int = 3,
         retrieval_admit_threshold: float = 0.78,
         retrieval_admit_margin: float = 0.04,
+        retrieval_strong_threshold: float = 0.82,
     ) -> None:
-        """Defaults updated 2026-05-06 after the demo hallucination finding:
-          - admit_threshold raised 0.55 → 0.78 (matches encoder background)
-          - admit_margin added (top - second ≥ 0.04) — top must be
-            meaningfully better than runner-up
-          - content_threshold = 0.50 — content-word fidelity gate (NEW)
-          - max_new_tokens dropped 200 → 120 (less room for tangents)
+        """Defaults updated 2026-05-06 after the demo hallucination finding +
+        the compositional false-negative finding (v2 rerun):
+
+          - admit_threshold = 0.78 (above encoder background ~0.74)
+          - admit_margin = 0.04 (top - second when top is BORDERLINE)
+          - strong_threshold = 0.82: when top ≥ this, admit all retrieved
+            ≥ admit_threshold without requiring margin. Catches the case
+            where multiple facts are genuinely relevant for a
+            compositional question (e.g. 'what eats mice AND what is the
+            largest cat') — three relevant facts at 0.84/0.83/0.83 should
+            be admitted, but their tight margin would otherwise refuse.
+          - content_threshold = 0.50 — content-word fidelity gate
+          - max_new_tokens = 120 (less room for tangents)
         """
         self.encode_fn = encode_fn
         self.renderer = renderer
@@ -104,26 +113,35 @@ class PathBPipeline:
         self.retrieval_k = retrieval_k
         self.retrieval_admit_threshold = retrieval_admit_threshold
         self.retrieval_admit_margin = retrieval_admit_margin
+        self.retrieval_strong_threshold = retrieval_strong_threshold
 
     # ---- Brain layer (overridable) ----------------------------------
 
     def gather_intent(self, query: str) -> StructuredIntent:
-        """Default brain: retrieval-only with admit-threshold + margin gate.
+        """Default brain: retrieval-only with TIERED admit gate.
 
-        Brain admit logic (post-2026-05-06 hallucination fix):
-          1. Top retrieval score must clear absolute threshold (default 0.78).
-             Encoder background cosine on E5 is ~0.74 for unrelated text;
-             0.78+ signals genuine relevance.
-          2. AND top must beat second by margin (default 0.04). Catches
-             the case where multiple unrelated facts all score ~0.78
-             due to encoder geometry — top isn't actually the right one.
+        Brain admit tiers (calibrated 2026-05-06 across two demo runs):
 
-        If either gate fails: BRAIN refuses (returns no facts). The LM
-        then renders a refusal sentence. This keeps refusal decisions
-        in the brain, not in the LM.
+          Tier 1 — top < admit_threshold (0.78):
+            REFUSE. Top score below encoder background → no genuine match.
 
-        Subclass and override to integrate the Stage 1 intent classifier,
-        planner, concept operators, etc.
+          Tier 2 — top in [admit_threshold, strong_threshold) (0.78-0.82):
+            BORDERLINE. Require margin (top - second ≥ 0.04) to admit.
+            Catches the case where multiple unrelated facts cluster
+            uniformly at ~0.78 due to encoder geometry (e.g. '2+2'
+            retrieving photosynthesis/gold/lightning all at ~0.78).
+
+          Tier 3 — top ≥ strong_threshold (0.82):
+            STRONG. Admit all retrieved ≥ admit_threshold without
+            requiring margin. Handles compositional questions where
+            multiple facts are genuinely relevant (e.g. 'what eats
+            mice and what is the largest cat?' → cats hunt 0.85,
+            cat mammal 0.83, tigers largest 0.83 — all relevant, tight
+            margin shouldn't refuse).
+
+        If a tier fails: BRAIN refuses, returns empty facts, LM
+        renders a refusal sentence. Refusal decisions stay in the
+        brain, not in the LM.
         """
         if self.retriever is None:
             return StructuredIntent(
@@ -131,15 +149,17 @@ class PathBPipeline:
                 user_query=query,
                 refusal_reason="no retriever configured",
             )
-        # Encode query and retrieve.
         z_query = self.encode_fn([query]).squeeze(0).flatten()
         retrieved = self.retriever.retrieve(z_query, k=self.retrieval_k)
 
         top_score = retrieved[0][1] if retrieved else 0.0
         second_score = retrieved[1][1] if len(retrieved) >= 2 else 0.0
         margin = top_score - second_score
-        admit_top = top_score >= self.retrieval_admit_threshold
-        admit_margin = margin >= self.retrieval_admit_margin
+        is_strong = top_score >= self.retrieval_strong_threshold
+        is_borderline = (
+            top_score >= self.retrieval_admit_threshold
+            and top_score < self.retrieval_strong_threshold
+        )
 
         intent = StructuredIntent(
             kind="factual_q",
@@ -149,28 +169,45 @@ class PathBPipeline:
             metadata={
                 "brain_admit_top_score": float(top_score),
                 "brain_admit_margin": float(margin),
-                "brain_admit_top_passed": bool(admit_top),
-                "brain_admit_margin_passed": bool(admit_margin),
+                "brain_admit_tier": (
+                    "strong" if is_strong
+                    else "borderline" if is_borderline
+                    else "below_threshold"
+                ),
             },
         )
-        if not retrieved or not admit_top or not admit_margin:
-            # Brain refuses on retrieval-relevance grounds.
+
+        # Tier 1: below admit threshold → refuse.
+        if not retrieved or top_score < self.retrieval_admit_threshold:
             intent.metadata["brain_refusal"] = True
             intent.metadata["brain_refusal_reason"] = (
-                "no retrieval admitted: "
-                + ("top score too low" if not admit_top else "")
-                + (("; " if not admit_top and not admit_margin else "")
-                   if (not admit_top or not admit_margin) else "")
-                + ("margin too small (top barely better than runner-up)"
-                   if not admit_margin else "")
+                f"top retrieval score {top_score:.3f} below "
+                f"admit threshold {self.retrieval_admit_threshold} "
+                f"(encoder background)"
             )
             return intent
 
-        # Brain admits: keep ALL retrieved (above threshold) for the
-        # prompt, but only the top-1 is "definitely relevant"; the LM
-        # is told in the prompt to use the SINGLE most relevant fact.
-        intent.retrieved_facts = [r[0] for r in retrieved]
-        intent.retrieved_scores = [r[1] for r in retrieved]
+        # Tier 2: borderline → require margin.
+        if is_borderline and margin < self.retrieval_admit_margin:
+            intent.metadata["brain_refusal"] = True
+            intent.metadata["brain_refusal_reason"] = (
+                f"borderline top score ({top_score:.3f}) AND tight margin "
+                f"({margin:+.3f} < {self.retrieval_admit_margin}) — "
+                f"top barely better than runner-up, signal of false retrieval"
+            )
+            return intent
+
+        # Tier 3 (strong) OR Tier 2 with margin: admit all retrieved
+        # above admit_threshold. The LM prompt tells it to pick the
+        # single most relevant fact (or two if both directly answer
+        # a compositional question).
+        admitted = [
+            (text, score, meta)
+            for (text, score, meta) in retrieved
+            if score >= self.retrieval_admit_threshold
+        ]
+        intent.retrieved_facts = [r[0] for r in admitted]
+        intent.retrieved_scores = [r[1] for r in admitted]
         return intent
 
     # ---- Run a query end-to-end -------------------------------------
@@ -219,6 +256,7 @@ class PathBPipeline:
             brain_refusal=brain_refusal,
             brain_admit_top_score=float(intent.metadata.get("brain_admit_top_score", 0.0)),
             brain_admit_margin=float(intent.metadata.get("brain_admit_margin", 0.0)),
+            brain_admit_tier=str(intent.metadata.get("brain_admit_tier", "")),
             lm_prompt=prompt,
             lm_output_raw=gen.text,
             lm_n_input_tokens=gen.n_input_tokens,
