@@ -21,3 +21,10 @@ pyyaml>=6.0
 #   wordfreq proxy.
 wordfreq>=3.0
 language_tool_python>=2.7
+
+# Path B surface renderer — required for selflearnai/renderer/.
+# accelerate is used by transformers' AutoModelForCausalLM for efficient
+# device mapping; Qwen 2.5 / Phi-3-mini / Llama 3.2 all benefit. Optional
+# but strongly recommended; without it, the LM still loads but more
+# slowly and with no device_map="auto" support.
+accelerate>=0.30
