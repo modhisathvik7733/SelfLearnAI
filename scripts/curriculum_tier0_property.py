@@ -50,6 +50,7 @@ from selflearnai.concepts.relational_operator import (
     AxisVocabulary,
     RelationalOperator,
 )
+from selflearnai.concepts.property_pkg import PropertyOperatorPackage
 
 from scripts.stage1_planner_beam_smoke import ENCODERS, make_encode_fn
 
@@ -357,6 +358,11 @@ def main() -> None:
     parser.add_argument("--train-tsv", default="data/property/text_pairs_train.tsv")
     parser.add_argument("--holdout-tsv", default="data/property/text_pairs_holdout.tsv")
     parser.add_argument("--out", default="results/curriculum/tier0_property.json")
+    parser.add_argument("--ckpt-root", default="data/property/checkpoints",
+                        help="Save trained PropertyOperatorPackage under this dir. "
+                             "Loaded by Path B demo for end-to-end inference.")
+    parser.add_argument("--save-on-pass-only", action="store_true",
+                        help="If set, only save the package when verdict is PASS.")
     args = parser.parse_args()
 
     enc_cfg = ENCODERS[args.encoder]
@@ -632,6 +638,32 @@ def main() -> None:
     with open(out_path, "w") as f:
         json.dump(payload, f, indent=2)
     print(f"\n→ saved JSON to {out_path}")
+
+    # Persist the trained PropertyOperatorPackage for downstream Path B
+    # inference. Skipped only when running cosine ablation (no training
+    # value pool was built) or when --save-on-pass-only and accept=False.
+    save_pkg = (args.loss == "contrastive") and (accept or not args.save_on_pass_only)
+    if save_pkg:
+        ckpt_root = Path(args.ckpt_root)
+        # Use the training value pool (training values only — no holdout
+        # leakage; the demo will re-encode at load time).
+        train_value_pool_strs = sorted({p["value"] for p in train_pairs})
+        PropertyOperatorPackage.save_from_training(
+            root=ckpt_root,
+            op=op,
+            vocab=vocab,
+            pool_mean=pool_mean,
+            value_pool=train_value_pool_strs,
+        )
+        print(f"→ saved PropertyOperatorPackage to {ckpt_root}/ "
+              f"(operator.pt, vocab.json, value_pool.json"
+              f"{', pool_mean.pt' if pool_mean is not None else ''})")
+        print(f"  Path B demo can now load this via "
+              f"PropertyOperatorPackage.load('{ckpt_root}', encode_fn)")
+    else:
+        if args.save_on_pass_only and not accept:
+            print(f"→ NOT saving package (verdict failed and --save-on-pass-only set)")
+
     raise SystemExit(0 if accept else 1)
 
 

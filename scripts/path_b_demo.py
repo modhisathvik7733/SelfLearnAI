@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from selflearnai.memory import Corpus, Retriever
 from selflearnai.renderer import LMRenderer, PathBPipeline
+from selflearnai.concepts.property_pkg import PropertyOperatorPackage
 
 from scripts.stage1_planner_beam_smoke import ENCODERS, make_encode_fn
 
@@ -91,7 +92,17 @@ def print_response(resp, *, show_prompt: bool = False) -> None:
     print(f"  intent:          {resp.intent_kind}")
 
     # Brain admit diagnostics
-    if resp.intent_kind == "factual_q":
+    if resp.intent_kind == "property_q":
+        # Brain answered via property RelationalOperator (Tier 0.1).
+        print(f"  brain route:     property_op  "
+              f"entity={resp.property_entity!r}  axis={resp.property_axis!r}")
+        print(f"  brain answer:    {resp.property_top_value!r}  "
+              f"(cos {resp.property_top_score:.3f}, "
+              f"margin +{resp.property_top_margin:.3f})")
+        if resp.property_topk:
+            top3 = ", ".join(f"{v}({s:.3f})" for v, s in resp.property_topk[:3])
+            print(f"  brain top-3:     {top3}")
+    elif resp.intent_kind == "factual_q":
         tier = resp.brain_admit_tier
         if resp.brain_refusal:
             print(f"  brain admit:     ✗ REFUSED  "
@@ -184,6 +195,13 @@ def main() -> None:
                         help="Frequency cutoff between 'common-paraphrase' (allowed as "
                              "fluency) and 'rare-specific' (likely hallucinated facts).")
     parser.add_argument("--max-new-tokens", type=int, default=120)
+    parser.add_argument("--property-ckpt-root", default="data/property/checkpoints",
+                        help="Load PropertyOperatorPackage from this dir if it exists. "
+                             "Pass --no-property to disable.")
+    parser.add_argument("--no-property", action="store_true",
+                        help="Disable property operator routing (retrieval-only).")
+    parser.add_argument("--property-top-score-min", type=float, default=0.18,
+                        help="Property op confidence floor; below this → brain refuses.")
     parser.add_argument("--query", default=None,
                         help="If given: one-shot run with this query. Otherwise interactive.")
     parser.add_argument("--show-prompt", action="store_true",
@@ -224,11 +242,37 @@ def main() -> None:
     )
     print(f"    LM loaded ({renderer.n_params/1e6:.1f}M params, frozen)")
 
+    # ---- Property operator package (Tier 0.1 reasoning) ------------
+    property_pkg = None
+    property_root = Path(args.property_ckpt_root)
+    if not args.no_property and property_root.exists():
+        try:
+            property_pkg = PropertyOperatorPackage.load(
+                property_root, encode, device=args.device,
+            )
+            print(f"\n[3.5] Property operator loaded from {property_root}")
+            print(f"    axes: {property_pkg.axis_names()}")
+            print(f"    pool size: {len(property_pkg.value_pool)}  "
+                  f"centering: {'ON' if property_pkg.pool_mean is not None else 'OFF'}")
+            print(f"    Property questions (e.g., 'what color is the sky?', "
+                  f"'where do penguins live?') will be answered by the brain "
+                  f"in pure ψ-space — LM is pure typewriter.")
+        except Exception as e:
+            print(f"\n[3.5] FAILED to load property operator: {type(e).__name__}: {e}")
+            print(f"    Falling back to retrieval-only mode.")
+            property_pkg = None
+    elif args.no_property:
+        print(f"\n[3.5] Property operator: disabled by --no-property")
+    else:
+        print(f"\n[3.5] Property operator: not found at {property_root}")
+        print(f"    Train one via: python scripts/curriculum_tier0_property.py --no-mlp")
+
     # ---- Pipeline ----------------------------------------------------
     pipeline = PathBPipeline(
         encode_fn=encode,
         renderer=renderer,
         retriever=retriever,
+        property_pkg=property_pkg,
         grounding_threshold=args.grounding_threshold,
         relevance_threshold=args.relevance_threshold,
         content_threshold=args.content_threshold,
@@ -239,6 +283,7 @@ def main() -> None:
         retrieval_admit_threshold=args.admit_threshold,
         retrieval_admit_margin=args.admit_margin,
         retrieval_strong_threshold=args.strong_threshold,
+        property_top_score_min=args.property_top_score_min,
     )
     print(f"\n[4] Pipeline ready.")
     print(f"    brain admit:     tiered  "
@@ -270,12 +315,25 @@ def main() -> None:
     print("\n" + "=" * 78)
     print("Interactive mode. Type a question; type 'quit' / 'exit' to end.")
     print("Sample queries to try:")
-    print("  - What is a cat?")
-    print("  - What's the capital of France?")
-    print("  - What is photosynthesis?")
-    print("  - What is the largest desert?")
-    print("  - Who is Einstein?           (out of corpus → should refuse)")
-    print("  - What's 2 plus 2?            (out of corpus → should refuse)")
+    print("")
+    print("  RETRIEVAL queries (answered via fact corpus):")
+    print("    - What is a cat?")
+    print("    - What's the capital of France?")
+    print("    - What is photosynthesis?")
+    if property_pkg is not None:
+        print("")
+        print("  PROPERTY queries (answered by Tier 0.1 ψ-space operator):")
+        print("    - What color is the sky?")
+        print("    - What does a plant need?")
+        print("    - Where do penguins live?")
+        print("    - What sound does a horse make?")
+        print("    - What is paper made of?")
+        print("    - What is a finger part of?")
+        print("    - What does a brain do?")
+    print("")
+    print("  REFUSAL (out of corpus AND not property-shape):")
+    print("    - Who is Einstein?")
+    print("    - What's 2 plus 2?")
     print("=" * 78)
 
     try:

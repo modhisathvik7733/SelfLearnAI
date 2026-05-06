@@ -57,6 +57,13 @@ class RenderedResponse:
     content_threshold: float = 0.0
     rare_novel_max: int = 0
     verifier_failure_reason: Optional[str] = None
+    # Property-operator audit (when intent.kind == "property_q")
+    property_entity: Optional[str] = None
+    property_axis: Optional[str] = None
+    property_top_value: Optional[str] = None
+    property_top_score: float = 0.0
+    property_top_margin: float = 0.0
+    property_topk: list[tuple[str, float]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -78,6 +85,7 @@ class PathBPipeline:
         encode_fn: Callable[[list[str]], "torch.Tensor"],
         renderer: LMRenderer,
         retriever: Optional[Any] = None,                   # selflearnai.memory.Retriever
+        property_pkg: Optional[Any] = None,                # PropertyOperatorPackage
         *,
         grounding_threshold: float = 0.65,
         relevance_threshold: float = 0.50,
@@ -89,6 +97,7 @@ class PathBPipeline:
         retrieval_admit_threshold: float = 0.78,
         retrieval_admit_margin: float = 0.04,
         retrieval_strong_threshold: float = 0.82,
+        property_top_score_min: float = 0.18,
     ) -> None:
         """Defaults updated 2026-05-06 after the demo hallucination finding +
         the compositional false-negative finding (v2 rerun):
@@ -107,6 +116,7 @@ class PathBPipeline:
         self.encode_fn = encode_fn
         self.renderer = renderer
         self.retriever = retriever
+        self.property_pkg = property_pkg
         self.prompt_builder = PromptBuilder(renderer)
         self.verifier = RenderingVerifier(
             encode_fn=encode_fn,
@@ -121,35 +131,60 @@ class PathBPipeline:
         self.retrieval_admit_threshold = retrieval_admit_threshold
         self.retrieval_admit_margin = retrieval_admit_margin
         self.retrieval_strong_threshold = retrieval_strong_threshold
+        self.property_top_score_min = property_top_score_min
 
     # ---- Brain layer (overridable) ----------------------------------
 
     def gather_intent(self, query: str) -> StructuredIntent:
-        """Default brain: retrieval-only with TIERED admit gate.
+        """Routes the query through brain components in priority order:
 
-        Brain admit tiers (calibrated 2026-05-06 across two demo runs):
+          1. PROPERTY OPERATOR (Tier 0.1) — if query parses as a property
+             question AND we have a trained operator, use it. The brain
+             computes the answer in pure ψ-space; the LM types it.
 
-          Tier 1 — top < admit_threshold (0.78):
-            REFUSE. Top score below encoder background → no genuine match.
+          2. RETRIEVAL (Path B v1) — for everything else, the brain
+             retrieves grounded facts from a corpus. Tiered admit gate
+             handles refusal-relevant cases.
 
-          Tier 2 — top in [admit_threshold, strong_threshold) (0.78-0.82):
-            BORDERLINE. Require margin (top - second ≥ 0.04) to admit.
-            Catches the case where multiple unrelated facts cluster
-            uniformly at ~0.78 due to encoder geometry (e.g. '2+2'
-            retrieving photosynthesis/gold/lightning all at ~0.78).
-
-          Tier 3 — top ≥ strong_threshold (0.82):
-            STRONG. Admit all retrieved ≥ admit_threshold without
-            requiring margin. Handles compositional questions where
-            multiple facts are genuinely relevant (e.g. 'what eats
-            mice and what is the largest cat?' → cats hunt 0.85,
-            cat mammal 0.83, tigers largest 0.83 — all relevant, tight
-            margin shouldn't refuse).
-
-        If a tier fails: BRAIN refuses, returns empty facts, LM
-        renders a refusal sentence. Refusal decisions stay in the
-        brain, not in the LM.
+          3. REFUSAL — when neither operator nor retrieval has a
+             confident answer.
         """
+        # ---- 1. Try property operator first --------------------
+        if self.property_pkg is not None:
+            from selflearnai.intent.property_parser import parse_property_question
+            parsed = parse_property_question(query)
+            if parsed is not None:
+                entity, axis = parsed
+                if self.property_pkg.has_axis(axis):
+                    topk = self.property_pkg.query(
+                        entity, axis, self.encode_fn, k=5,
+                    )
+                    intent = StructuredIntent(
+                        kind="property_q",
+                        user_query=query,
+                        property_entity=entity,
+                        property_axis=axis,
+                        property_top_value=topk.top_value,
+                        property_top_score=topk.top_score,
+                        property_top_margin=topk.margin,
+                        property_topk=list(topk.candidates),
+                    )
+                    intent.metadata["brain_admit_tier"] = "property_op"
+                    intent.metadata["brain_admit_top_score"] = topk.top_score
+                    intent.metadata["brain_admit_margin"] = topk.margin
+                    # Confidence gate: refuse if top score below floor
+                    if topk.top_score < self.property_top_score_min:
+                        intent.metadata["brain_refusal"] = True
+                        intent.metadata["brain_refusal_reason"] = (
+                            f"property operator low confidence: top score "
+                            f"{topk.top_score:.3f} < {self.property_top_score_min}"
+                        )
+                        # Convert to refusal intent so the verifier auto-passes
+                        intent.kind = "factual_q"
+                        intent.property_top_value = None
+                    return intent
+
+        # ---- 2. Fall back to retrieval -------------------------
         if self.retriever is None:
             return StructuredIntent(
                 kind="refusal_render",
@@ -281,6 +316,12 @@ class PathBPipeline:
             content_threshold=verification.content_threshold,
             rare_novel_max=verification.rare_novel_max,
             verifier_failure_reason=verification.failure_reason,
+            property_entity=intent.property_entity,
+            property_axis=intent.property_axis,
+            property_top_value=intent.property_top_value,
+            property_top_score=float(intent.property_top_score or 0.0),
+            property_top_margin=float(intent.property_top_margin or 0.0),
+            property_topk=list(intent.property_topk),
         )
 
     @staticmethod
@@ -296,6 +337,17 @@ class PathBPipeline:
             return parts
         if intent.kind == "raw" and intent.raw_target_text:
             return [intent.raw_target_text]
+        if intent.kind == "property_q":
+            # Verifier compares LM output to: query + entity + axis + value.
+            # The value MUST appear in output (content-fidelity gate enforces it).
+            parts = [intent.user_query]
+            if intent.property_entity:
+                parts.append(intent.property_entity)
+            if intent.property_axis:
+                parts.append(intent.property_axis.replace("_", " "))
+            if intent.property_top_value:
+                parts.append(intent.property_top_value)
+            return parts
         return []
 
     @staticmethod

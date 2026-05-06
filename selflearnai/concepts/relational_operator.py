@@ -31,6 +31,8 @@ distractors.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Iterable
 
 import torch
@@ -152,6 +154,37 @@ class RelationalOperator(nn.Module):
             z_result = z_result.squeeze(0)
         return z_result
 
+    # ---- Persistence ------------------------------------------------
+
+    def save(self, path: str | Path) -> None:
+        """Save state_dict + architecture metadata to a single .pt file."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "state_dict": self.state_dict(),
+                "dim": self.dim,
+                "num_axes": self.num_axes,
+                "use_mlp": self.use_mlp,
+            },
+            path,
+        )
+
+    @classmethod
+    def load(cls, path: str | Path) -> "RelationalOperator":
+        """Restore a frozen RelationalOperator from disk. Eval-only."""
+        d = torch.load(str(path), map_location="cpu", weights_only=True)
+        op = cls(
+            dim=int(d["dim"]),
+            num_axes=int(d["num_axes"]),
+            use_mlp=bool(d.get("use_mlp", True)),
+        )
+        op.load_state_dict(d["state_dict"])
+        op.eval()
+        for p in op.parameters():
+            p.requires_grad_(False)
+        return op
+
 
 class AxisVocabulary:
     """Mapping from axis names to integer indices, persisted alongside
@@ -199,3 +232,14 @@ class AxisVocabulary:
     @classmethod
     def from_dict(cls, d: dict) -> "AxisVocabulary":
         return cls(d["axes"])
+
+    def save(self, path: str | Path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(self.to_dict(), f, indent=2)
+
+    @classmethod
+    def load(cls, path: str | Path) -> "AxisVocabulary":
+        with open(Path(path)) as f:
+            return cls.from_dict(json.load(f))

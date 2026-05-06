@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
 
-IntentKind = Literal["factual_q", "transformation", "refusal_render", "raw"]
+IntentKind = Literal["factual_q", "transformation", "refusal_render", "raw", "property_q"]
 
 
 @dataclass
@@ -40,6 +40,13 @@ class StructuredIntent:
     refusal_reason: Optional[str] = None
     # For raw (a brain-derived ψ_target the LM must express literally):
     raw_target_text: Optional[str] = None
+    # For property_q (Tier 0.1 RelationalOperator output):
+    property_entity: Optional[str] = None
+    property_axis: Optional[str] = None
+    property_top_value: Optional[str] = None
+    property_top_score: Optional[float] = None
+    property_top_margin: Optional[float] = None
+    property_topk: list[tuple[str, float]] = field(default_factory=list)
     # Always:
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -86,6 +93,17 @@ class PromptBuilder:
         "but you may NOT add facts beyond the target. Keep it short."
     )
 
+    SYSTEM_PROPERTY = (
+        "You are a careful assistant. The brain has computed a relational answer "
+        "about an entity's property using a learned ψ-space operator. You are given "
+        "ENTITY, AXIS, and VALUE.\n"
+        "STRICT RULES:\n"
+        "1. Render the relation as ONE short natural sentence.\n"
+        "2. The sentence must contain the VALUE word (or close inflection of it).\n"
+        "3. You may NOT add specific terms, names, or details beyond ENTITY, AXIS, VALUE.\n"
+        "4. No explanations, qualifications, or extra facts."
+    )
+
     def __init__(self, lm_renderer) -> None:
         """`lm_renderer` is needed for chat-template formatting."""
         self.lm = lm_renderer
@@ -99,6 +117,8 @@ class PromptBuilder:
             return self._build_refusal(intent)
         if intent.kind == "raw":
             return self._build_raw(intent)
+        if intent.kind == "property_q":
+            return self._build_property(intent)
         raise ValueError(f"unknown intent kind: {intent.kind!r}")
 
     def _build_factual(self, intent: StructuredIntent) -> str:
@@ -151,3 +171,24 @@ class PromptBuilder:
             f"Output the target text as your response (you may polish phrasing):"
         )
         return self.lm.chat_format(self.SYSTEM_RAW, user)
+
+    def _build_property(self, intent: StructuredIntent) -> str:
+        topk_str = ""
+        if intent.property_topk:
+            topk_str = "\nBRAIN TOP-3 (for context only — render with VALUE above):\n"
+            for v, score in intent.property_topk[:3]:
+                topk_str += f"  · {v} (cos {score:.3f})\n"
+        user = (
+            f"USER QUERY: {intent.user_query}\n"
+            f"ENTITY: {intent.property_entity}\n"
+            f"AXIS: {intent.property_axis}\n"
+            f"VALUE: {intent.property_top_value}"
+            f"{topk_str}\n"
+            f"Render this relation as one short sentence (the sentence MUST "
+            f"contain the VALUE word). Examples of the format:\n"
+            f"  - 'The {intent.property_axis} of {intent.property_entity} "
+            f"is {intent.property_top_value}.'\n"
+            f"  - 'A {intent.property_entity}'s {intent.property_axis} "
+            f"is {intent.property_top_value}.'"
+        )
+        return self.lm.chat_format(self.SYSTEM_PROPERTY, user)
