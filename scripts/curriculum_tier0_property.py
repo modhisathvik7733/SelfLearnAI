@@ -141,20 +141,31 @@ def train_operator_contrastive(
     lr: float,
     log_every: int,
     weight_decay: float = 0.0,
-    temperature: float = 0.1,
+    temperature: float = 0.05,
+    axis_value_mask: torch.Tensor | None = None,    # (num_axes, P), True = valid negative
 ) -> list[dict]:
-    """InfoNCE / NT-Xent contrastive training.
+    """InfoNCE / NT-Xent contrastive training with optional per-axis
+    hard-negative masking.
 
-    For each (entity, axis) pair, the operator's prediction must be
-    closer to its TRUE value than to ALL OTHER values in the training
-    pool. This is the ranking objective the cosine loss was missing.
+    For each (entity, axis, value) pair, the operator's prediction must
+    rank its TRUE value above all OTHER candidate values.
+
+    When `axis_value_mask` is provided: negatives are restricted to
+    values that appear in the SAME axis in training. This is the
+    standard KG-embedding / supervised-SimCSE pattern (research-validated
+    2026-05-06): random cross-axis negatives are trivially easy
+    ('meow' is far from 'blue'); hard within-axis negatives ('yellow'
+    vs 'blue' for color queries) force the operator to learn fine-
+    grained distinctions.
+
+    When `axis_value_mask=None`: falls back to all-training-values as
+    negatives (v3 behavior).
 
     Loss:
-        logits = (z_pred_norm @ pool_norm.T) / temperature   (N, P)
-        loss   = CE(logits, positive_indices)
-
-    Tracks training top-1 accuracy as the health metric (vs cosine for
-    the cosine-loss variant)."""
+        logits = (z_pred_norm @ pool_norm.T) / temperature
+        if hard negatives: mask out cross-axis values to -inf
+        loss = CE(logits, positive_indices)
+    """
     pool_norm = F.normalize(train_value_pool, p=2, dim=-1)        # (P, D)
     opt = torch.optim.AdamW(op.parameters(), lr=lr, weight_decay=weight_decay)
     history: list[dict] = []
@@ -164,6 +175,11 @@ def train_operator_contrastive(
         z_pred = op(z_entity, axis_idx)                            # (N, D)
         z_pred_norm = F.normalize(z_pred, p=2, dim=-1)
         logits = z_pred_norm @ pool_norm.T / temperature           # (N, P)
+        if axis_value_mask is not None:
+            # Per-axis hard negatives: keep only same-axis values.
+            batch_mask = axis_value_mask[axis_idx]                 # (N, P) bool
+            # Mask cross-axis values to -inf so cross_entropy ignores them.
+            logits = logits.masked_fill(~batch_mask, float("-inf"))
         loss = F.cross_entropy(logits, train_value_idx)
         loss.backward()
         opt.step()
@@ -211,20 +227,23 @@ def evaluate_holdout(
     vocab: AxisVocabulary,
     *,
     k_values: tuple[int, ...] = (1, 3, 5),
-    center_embeddings: bool = False,
+    pool_mean: torch.Tensor | None = None,
 ) -> dict:
     """Top-K retrieval over a value pool. Top-K hit if expected_value
     is among the top-K nearest pool words by cosine.
 
-    Per the v3 fix (2026-05-06): top-1 alone is misleading in encoder
-    space where many candidates cluster at cos 0.85-0.95 with margins
-    of 0.01-0.02. Top-3 and top-5 measure whether the operator landed
-    in the right semantic neighborhood — what a Path B verifier-gated
-    pipeline could actually use as the candidate set.
+    Per the v3 fix: top-1 alone is misleading in encoder space where
+    many candidates cluster at cos 0.85-0.95 with margins of 0.01-0.02.
+    Top-3 and top-5 measure whether the operator landed in the right
+    semantic neighborhood.
+
+    Per the v4 fix: pass `pool_mean` (fitted on TRAINING values only)
+    to subtract from BOTH eval pool and entities at eval time. Removes
+    anisotropic encoder bias consistently with training.
     """
     z_pool = encode_fn(pool)                                        # (P, D)
-    if center_embeddings:
-        z_pool = z_pool - z_pool.mean(dim=0, keepdim=True)
+    if pool_mean is not None:
+        z_pool = z_pool - pool_mean
     z_pool_norm = F.normalize(z_pool, p=2, dim=-1)
     max_k = max(k_values)
 
@@ -240,8 +259,8 @@ def evaluate_holdout(
             continue
         axis_idx = vocab[axis]
         z_entity = encode_fn([entity]).squeeze(0).flatten()         # (D,)
-        if center_embeddings:
-            z_entity = z_entity - z_pool.mean(dim=0)                # rough centering
+        if pool_mean is not None:
+            z_entity = z_entity - pool_mean.squeeze(0)
         z_pred = op(z_entity, axis_idx).flatten()
         z_pred_norm = F.normalize(z_pred.unsqueeze(0), p=2, dim=-1).squeeze(0)
         scores = z_pool_norm @ z_pred_norm                          # (P,)
@@ -305,11 +324,26 @@ def main() -> None:
                         help="Training loss. v3 default is contrastive (InfoNCE) "
                              "for proper ranking — makes positive value RANK ABOVE "
                              "all other training values, not just be 'close to' it.")
-    parser.add_argument("--temperature", type=float, default=0.1,
-                        help="InfoNCE temperature. 0.1 standard.")
-    parser.add_argument("--center-embeddings", action="store_true",
-                        help="Subtract pool mean from embeddings (debiases encoder "
-                             "preferences toward generic words like 'water' / 'milk').")
+    parser.add_argument("--temperature", type=float, default=0.05,
+                        help="InfoNCE temperature. v4 default 0.05 (was 0.1) — "
+                             "SimCSE-supervised default; lower temp sharpens "
+                             "ranking on tightly-clustered same-axis pools.")
+    parser.add_argument("--center-embeddings", action="store_true", default=True,
+                        help="Subtract training-value pool mean from values + "
+                             "entities. Removes anisotropic encoder bias toward "
+                             "common words ('water', 'yellow', 'milk') that "
+                             "dominate ranking in tight clusters. v4 default ON.")
+    parser.add_argument("--no-center-embeddings",
+                        dest="center_embeddings", action="store_false",
+                        help="Disable centering (ablation).")
+    parser.add_argument("--hard-negatives", action="store_true", default=True,
+                        help="Per-axis hard negatives in contrastive loss. "
+                             "Each pair's negatives are restricted to values "
+                             "that appear under the SAME axis in training. "
+                             "Standard KG-embedding/SimCSE pattern. v4 default ON.")
+    parser.add_argument("--no-hard-negatives",
+                        dest="hard_negatives", action="store_false",
+                        help="Use all training values as negatives (v3 ablation).")
     parser.add_argument("--top1-min", type=float, default=0.30,
                         help="Acceptance: held-out top-1 ≥ this. Looser than v1/v2 "
                              "since encoder-geometry margins make top-1 a hard bar.")
@@ -392,6 +426,10 @@ def main() -> None:
     if not use_mlp:
         print(f"  (linear-only diagnostic — cannot memorize entity→value; "
               f"forces axis-as-direction learning)")
+    # Pool mean (for centering) — fitted ON THE TRAINING VALUE POOL ONLY.
+    # This removes anisotropic encoder bias without leaking holdout statistics.
+    pool_mean: torch.Tensor | None = None
+
     if args.loss == "contrastive":
         # Build the training value pool (unique training values only —
         # no holdout leakage). Each pair's value must map to a pool index.
@@ -403,14 +441,45 @@ def main() -> None:
             train_value_idx_int, dtype=torch.long, device=args.device,
         )
         z_train_value_pool = encode(train_value_pool)
+        z_entity_train = z_entity
+
         if args.center_embeddings:
-            z_train_value_pool = z_train_value_pool - z_train_value_pool.mean(dim=0, keepdim=True)
-        print(f"  loss=contrastive (InfoNCE) — pool size {len(train_value_pool)}, "
-              f"temperature={args.temperature}")
+            pool_mean = z_train_value_pool.mean(dim=0, keepdim=True)  # (1, D)
+            z_train_value_pool = z_train_value_pool - pool_mean
+            z_entity_train = z_entity_train - pool_mean
+
+        # Per-axis hard-negative mask: (num_axes, P_train).
+        # axis_value_mask[a, j] = True iff training value `j` appears
+        # under axis `a` in the training data — the only valid negatives
+        # for axis-`a` pairs.
+        axis_value_mask: torch.Tensor | None = None
+        if args.hard_negatives:
+            n_axes = len(vocab)
+            P = len(train_value_pool)
+            axis_value_mask = torch.zeros(
+                n_axes, P, dtype=torch.bool, device=args.device,
+            )
+            for p in train_pairs:
+                a_idx = vocab[p["axis"]]
+                v_idx = train_value_pool.index(p["value"])
+                axis_value_mask[a_idx, v_idx] = True
+            avg_negatives = axis_value_mask.float().sum(dim=1).mean().item() - 1
+            print(f"  loss=contrastive (InfoNCE)  pool size={P}  "
+                  f"temperature={args.temperature}  "
+                  f"hard-negatives=ON (avg {avg_negatives:.1f} same-axis negatives/pair)")
+        else:
+            print(f"  loss=contrastive (InfoNCE)  pool size={len(train_value_pool)}  "
+                  f"temperature={args.temperature}  hard-negatives=OFF")
+        if args.center_embeddings:
+            print(f"  centering=ON (pool_mean fitted on {len(train_value_pool)} train values)")
+        else:
+            print(f"  centering=OFF")
+
         history = train_operator_contrastive(
-            op, z_entity, z_train_value_pool, train_value_idx, train_axis_idx,
+            op, z_entity_train, z_train_value_pool, train_value_idx, train_axis_idx,
             epochs=args.epochs, lr=args.lr, log_every=args.log_every,
             weight_decay=args.weight_decay, temperature=args.temperature,
+            axis_value_mask=axis_value_mask,
         )
     else:
         print(f"  loss=cosine (1 - cos(z_pred, z_value))")
@@ -428,7 +497,7 @@ def main() -> None:
     print("-" * 78)
     eval_result = evaluate_holdout(
         op, encode, holdout_pairs, pool, vocab,
-        center_embeddings=args.center_embeddings,
+        pool_mean=pool_mean,    # use training-pool mean (consistent with training)
     )
     rates = eval_result["rates"]
     n_total = eval_result["n_total"]
