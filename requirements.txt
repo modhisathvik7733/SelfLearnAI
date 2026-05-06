@@ -1,6 +1,23 @@
+# Core dependencies — required for Stages 0, 0.5, 1, 1.5, 2a, 3 (the
+# foundation pipeline) and the §20.0b foundation diagnostic.
 torch>=2.5
 transformers>=5.6
 pycocotools>=2.0
 Pillow>=10.0
 numpy>=1.26
 pyyaml>=6.0
+
+# Grammar evaluation — required for Phase 2a / Stage 3 / Stage 3.5f
+# grammar gates. Soft-imported in selflearnai/generator/eval.py and
+# scripts/stage2a_quick_probe.py; the code falls back to a no-grammar
+# verdict if absent. Pin them here so a fresh `pip install -r` covers
+# full repro.
+#
+# wordfreq: fast Zipf-frequency proxy used as the v1 grammar gate.
+# language_tool_python: rule-based grammar gold standard. ALSO needs a
+#   Java runtime on the host (e.g. `apt-get install -y default-jre` on
+#   Debian/Ubuntu). The module imports cleanly without Java but raises
+#   at first use; downstream scripts handle that and fall back to the
+#   wordfreq proxy.
+wordfreq>=3.0
+language_tool_python>=2.7
